@@ -29,8 +29,49 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import torch.nn as nn
 from wave_field.model import WaveFieldDenoiser
 from wave_field.diffusion import DDPMDiffusion, EMA
+
+
+# ---------------------------------------------------------------------------
+# Standard attention baseline (drop-in swap for ablation)
+# ---------------------------------------------------------------------------
+
+class StandardAttention(nn.Module):
+    """Scaled dot-product attention — same interface as WaveFieldAttention."""
+
+    def __init__(self, dim, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.qkv = nn.Linear(dim, 3 * dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim)
+
+    def forward(self, x, t_emb=None):  # noqa: ARG002
+        B, L, D = x.shape
+        H, Dh = self.num_heads, self.head_dim
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
+        q = q.view(B, L, H, Dh).permute(0, 2, 1, 3)
+        k = k.view(B, L, H, Dh).permute(0, 2, 1, 3)
+        v = v.view(B, L, H, Dh).permute(0, 2, 1, 3)
+        attn = (q @ k.transpose(-2, -1) * self.scale).softmax(dim=-1)
+        out = (attn @ v).permute(0, 2, 1, 3).contiguous().view(B, L, D)
+        return self.out_proj(out)
+
+
+def make_standard_model(image_size, in_channels, patch_size, dim, depth,
+                         num_heads, timestep_dim, conditioning):
+    """WaveFieldDenoiser with attention swapped out for standard softmax attention."""
+    model = WaveFieldDenoiser(
+        image_size=image_size, in_channels=in_channels, patch_size=patch_size,
+        dim=dim, depth=depth, num_heads=num_heads, timestep_dim=timestep_dim,
+        conditioning=conditioning, use_2d_kernel=False,
+    )
+    for block in model.blocks:
+        block.attn = StandardAttention(dim=dim, num_heads=num_heads)
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +90,8 @@ def get_args():
     p.add_argument("--num_heads", type=int, default=4)
     p.add_argument("--timestep_dim", type=int, default=128)
     p.add_argument("--num_timesteps", type=int, default=1000)
+    p.add_argument("--attn", default="wave", choices=["wave", "standard"],
+                   help="wave field attention or standard softmax (baseline)")
     p.add_argument("--kernel", default="2d", choices=["1d", "2d"],
                    help="1D sequence kernels or 2D spatial kernels (default: 2d)")
     p.add_argument("--patch_size", type=int, default=4,
@@ -185,20 +228,23 @@ def main():
     # Model
     # ------------------------------------------------------------------
     use_2d = (args.kernel == "2d")
-    model = WaveFieldDenoiser(
-        image_size=28,
-        in_channels=1,
-        patch_size=args.patch_size,
-        dim=args.dim,
-        depth=args.depth,
-        num_heads=args.num_heads,
-        timestep_dim=args.timestep_dim,
-        conditioning=args.conditioning,
-        use_2d_kernel=use_2d,
-    ).to(device)
+    if args.attn == "standard":
+        model = make_standard_model(
+            image_size=28, in_channels=1, patch_size=args.patch_size,
+            dim=args.dim, depth=args.depth, num_heads=args.num_heads,
+            timestep_dim=args.timestep_dim, conditioning=args.conditioning,
+        ).to(device)
+    else:
+        model = WaveFieldDenoiser(
+            image_size=28, in_channels=1, patch_size=args.patch_size,
+            dim=args.dim, depth=args.depth, num_heads=args.num_heads,
+            timestep_dim=args.timestep_dim, conditioning=args.conditioning,
+            use_2d_kernel=use_2d,
+        ).to(device)
 
     print(f"Parameters: {model.param_count():,}")
-    print(f"Patches: {model.num_patches}  (patch_size={args.patch_size})  kernel={'2D' if use_2d else '1D'}")
+    print(f"Patches: {model.num_patches}  (patch_size={args.patch_size})  "
+          f"attn={args.attn}  kernel={'2D' if use_2d else '1D'}")
 
     # Save config
     with open(os.path.join(args.save_dir, "config.json"), "w") as f:
