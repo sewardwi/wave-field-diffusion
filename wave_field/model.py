@@ -274,6 +274,7 @@ class WaveFieldDenoiser(nn.Module):
         timestep_dim: int = 128,
         conditioning: str = "physics",
         use_2d_kernel: bool = False,
+        use_self_cond: bool = False,
     ):
         super().__init__()
 
@@ -289,6 +290,7 @@ class WaveFieldDenoiser(nn.Module):
         self.patch_size = patch_size
         self.dim = dim
         self.conditioning = conditioning
+        self.use_self_cond = use_self_cond
 
         # Patch geometry
         self.ph = H // patch_size   # number of patches vertically
@@ -297,7 +299,9 @@ class WaveFieldDenoiser(nn.Module):
         self.patch_dim = in_channels * patch_size * patch_size
 
         # Patch embedding: flat patch → model dim
-        self.patch_embed = nn.Linear(self.patch_dim, dim)
+        # If using self-conditioning, input has 2× channels (noisy ‖ x_0 estimate)
+        embed_in = self.patch_dim * (2 if use_self_cond else 1)
+        self.patch_embed = nn.Linear(embed_in, dim)
         # 2D sin/cos positional embedding — gives spatial layout for free
         # (vs. learned 1D embedding that has to discover row/column structure)
         self.register_buffer(
@@ -337,14 +341,18 @@ class WaveFieldDenoiser(nn.Module):
     # Patch utilities
     # ------------------------------------------------------------------
 
-    def patchify(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, C, H, W) → (B, N, patch_dim) where N = ph * pw."""
+    def patchify(self, x: torch.Tensor, channels: int | None = None) -> torch.Tensor:
+        """
+        (B, C, H, W) → (B, N, C*P*P) where N = ph * pw.
+        `channels` overrides the assumed channel count (used for self-conditioned
+        input where C = 2 * in_channels).
+        """
         B, C, H, W = x.shape
         P = self.patch_size
-        # Rearrange into patches
+        flat_dim = (channels if channels is not None else self.in_channels) * P * P
         x = x.reshape(B, C, self.ph, P, self.pw, P)
         x = x.permute(0, 2, 4, 1, 3, 5).contiguous()   # (B, ph, pw, C, P, P)
-        x = x.view(B, self.num_patches, self.patch_dim)
+        x = x.view(B, self.num_patches, flat_dim)
         return x
 
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
@@ -361,16 +369,28 @@ class WaveFieldDenoiser(nn.Module):
     # Forward
     # ------------------------------------------------------------------
 
-    def forward(self, x_noisy: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_noisy: torch.Tensor, t: torch.Tensor,
+                self_cond: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
-            x_noisy: (B, C, H, W) noisy image in [-1, 1]
-            t:       (B,) integer diffusion timesteps in [0, T-1]
+            x_noisy:   (B, C, H, W) noisy image in [-1, 1]
+            t:         (B,) integer diffusion timesteps in [0, T-1]
+            self_cond: (B, C, H, W) previous step's x_0 estimate (Chen 2022),
+                       or None.  Required if use_self_cond=True; ignored otherwise.
+                       Pass zeros to disable self-conditioning for a given call.
         Returns:
-            eps_pred: (B, C, H, W) predicted noise
+            eps_pred: (B, C, H, W) predicted noise (or v if v-pred)
         """
-        # Embed patches
-        h = self.patch_embed(self.patchify(x_noisy)) + self.pos_embed  # (B, N, dim)
+        if self.use_self_cond:
+            if self_cond is None:
+                self_cond = torch.zeros_like(x_noisy)
+            # Concatenate along channel dim before patchify
+            x_in = torch.cat([x_noisy, self_cond], dim=1)
+            patches = self.patchify(x_in, channels=2 * self.in_channels)
+        else:
+            patches = self.patchify(x_noisy)
+
+        h = self.patch_embed(patches) + self.pos_embed   # (B, N, dim)
 
         # Embed timestep
         t_emb = self.time_embed(t)   # (B, timestep_dim)

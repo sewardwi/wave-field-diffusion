@@ -148,18 +148,41 @@ class DDPMDiffusion:
         t: torch.Tensor,
         noise: torch.Tensor | None = None,
         min_snr_gamma: float | None = 5.0,
+        self_cond_prob: float = 0.5,
     ) -> torch.Tensor:
         """
-        Training loss with optional Min-SNR weighting (Hang et al. 2023).
+        Training loss with optional Min-SNR weighting (Hang et al. 2023) and
+        self-conditioning (Chen et al. 2022).
 
-        SNR(t) = ᾱ_t / (1 − ᾱ_t).  Min-SNR weight is min(SNR, γ) / SNR for ε-pred,
-        and min(SNR, γ) / (SNR + 1) for v-pred — caps loss contribution from
-        degenerate extreme-SNR timesteps where uniform sampling wastes capacity.
+        Self-conditioning: if model.use_self_cond is True, with probability
+        `self_cond_prob` we run the model once (no grad), recover an x_0
+        estimate, detach it, and feed it back as `self_cond` on a second
+        forward pass.  The other (1−p) of the time we train with zeros so
+        the model handles both cases at inference.
         """
         if noise is None:
             noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start, t, noise=noise)
-        pred = model(x_noisy, t)
+
+        # Self-conditioning: optional first pass to get x_0 estimate
+        use_sc = getattr(model, "use_self_cond", False)
+        self_cond = None
+        if use_sc and self_cond_prob > 0 and torch.rand(1).item() < self_cond_prob:
+            with torch.no_grad():
+                first_pred = model(x_noisy, t)
+                if self.parameterization == "v":
+                    s_ab = self._extract(self.sqrt_alpha_bar, t, x_start.shape)
+                    s_omab = self._extract(self.sqrt_one_minus_alpha_bar, t, x_start.shape)
+                    # x_0 = α·x_t − σ·v
+                    self_cond = s_ab * x_noisy - s_omab * first_pred
+                else:
+                    s_recip = self._extract(self.sqrt_recip_alpha_bar, t, x_start.shape)
+                    s_recipm1 = self._extract(self.sqrt_recipm1_alpha_bar, t, x_start.shape)
+                    self_cond = s_recip * x_noisy - s_recipm1 * first_pred
+                self_cond = self_cond.detach()
+
+        # Main forward pass (with self_cond if computed, else implicit zeros)
+        pred = self._call_model(model, x_noisy, t, self_cond)
 
         if self.parameterization == "v":
             s_ab = self._extract(self.sqrt_alpha_bar, t, x_start.shape)
@@ -182,9 +205,17 @@ class DDPMDiffusion:
             return (w * per_sample).mean()
         return per_sample.mean()
 
-    def _model_eps(self, model: torch.nn.Module, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _call_model(model, x_t, t, self_cond=None):
+        """Forward pass that passes self_cond if the model accepts it."""
+        if getattr(model, "use_self_cond", False):
+            return model(x_t, t, self_cond=self_cond)
+        return model(x_t, t)
+
+    def _model_eps(self, model: torch.nn.Module, x_t: torch.Tensor, t: torch.Tensor,
+                   self_cond: torch.Tensor | None = None) -> torch.Tensor:
         """Run the model and return ε prediction regardless of parameterization."""
-        pred = model(x_t, t)
+        pred = self._call_model(model, x_t, t, self_cond)
         if self.parameterization == "v":
             # v = α·ε − σ·x_0, and x_t = α·x_0 + σ·ε
             # → ε = α·v + σ·x_t  (using α² + σ² = 1)
@@ -222,16 +253,20 @@ class DDPMDiffusion:
 
     @torch.no_grad()
     def p_sample_step(
-        self, model: torch.nn.Module, x: torch.Tensor, t_idx: int
-    ) -> torch.Tensor:
-        """Single DDPM reverse step: sample x_{t-1} from p_θ(x_{t-1} | x_t)."""
+        self, model: torch.nn.Module, x: torch.Tensor, t_idx: int,
+        self_cond: torch.Tensor | None = None,
+    ) -> tuple:
+        """
+        Single DDPM reverse step: sample x_{t-1} from p_θ(x_{t-1} | x_t).
+        Returns (x_next, x_start) so callers can thread x_start as self_cond.
+        """
         B = x.shape[0]
         t = torch.full((B,), t_idx, dtype=torch.long, device=x.device)
-        eps_pred = self._model_eps(model, x, t)
+        eps_pred = self._model_eps(model, x, t, self_cond=self_cond)
         x_start = self._predict_xstart(x, t, eps_pred)
         mean, _, log_var = self._q_posterior(x_start, x, t)
         noise = torch.randn_like(x) if t_idx > 0 else torch.zeros_like(x)
-        return mean + (0.5 * log_var).exp() * noise
+        return mean + (0.5 * log_var).exp() * noise, x_start
 
     @torch.no_grad()
     def sample(
@@ -243,11 +278,12 @@ class DDPMDiffusion:
     ) -> torch.Tensor:
         """Full DDPM reverse diffusion from pure noise → image."""
         x = torch.randn(shape, device=device)
+        x_start = None   # threaded as self_cond when use_self_cond is on
         steps = list(reversed(range(self.T)))
         if progress:
             steps = tqdm(steps, desc="DDPM sampling", total=self.T)
         for t_idx in steps:
-            x = self.p_sample_step(model, x, t_idx)
+            x, x_start = self.p_sample_step(model, x, t_idx, self_cond=x_start)
         return x
 
     # ------------------------------------------------------------------
@@ -276,6 +312,7 @@ class DDPMDiffusion:
         ts = list(reversed(range(0, T, step_ratio)))
 
         x = torch.randn(shape, device=device)
+        x_start_prev = None   # threaded as self_cond
         if progress:
             ts_iter = tqdm(ts, desc=f"DDIM sampling ({num_steps} steps)")
         else:
@@ -286,7 +323,7 @@ class DDPMDiffusion:
 
             B = x.shape[0]
             t_tensor = torch.full((B,), t_curr, dtype=torch.long, device=device)
-            eps_pred = self._model_eps(model, x, t_tensor)
+            eps_pred = self._model_eps(model, x, t_tensor, self_cond=x_start_prev)
 
             ab_t = self._extract(self.alpha_bar, t_tensor, x.shape)
 
@@ -299,6 +336,7 @@ class DDPMDiffusion:
             # Predicted x_0 — no clamp here; clamping intermediates compounds errors
             # over many small steps. Final output is clamped after the loop.
             x_start = (x - (1 - ab_t).sqrt() * eps_pred) / ab_t.sqrt()
+            x_start_prev = x_start   # feed forward to next step's self-conditioning
 
             # DDIM variance
             sigma = eta * ((1 - ab_prev) / (1 - ab_t) * (1 - ab_t / ab_prev)).sqrt()

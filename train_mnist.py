@@ -62,12 +62,13 @@ class StandardAttention(nn.Module):
 
 
 def make_standard_model(image_size, in_channels, patch_size, dim, depth,
-                         num_heads, timestep_dim, conditioning):
+                         num_heads, timestep_dim, conditioning, use_self_cond=False):
     """WaveFieldDenoiser with attention swapped out for standard softmax attention."""
     model = WaveFieldDenoiser(
         image_size=image_size, in_channels=in_channels, patch_size=patch_size,
         dim=dim, depth=depth, num_heads=num_heads, timestep_dim=timestep_dim,
         conditioning=conditioning, use_2d_kernel=False,
+        use_self_cond=use_self_cond,
     )
     for block in model.blocks:
         block.attn = StandardAttention(dim=dim, num_heads=num_heads)
@@ -106,6 +107,9 @@ def get_args():
                    help="v-prediction (recommended for cosine) or ε-prediction")
     p.add_argument("--ema_decay", type=float, default=0.9999,
                    help="EMA decay; sample from EMA weights for clean outputs")
+    p.add_argument("--self_cond", action=argparse.BooleanOptionalAction, default=True,
+                   help="Self-conditioning (Chen 2022) — adds an extra input channel "
+                        "with the previous step's x_0 estimate; usually improves quality")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -233,6 +237,7 @@ def main():
             image_size=28, in_channels=1, patch_size=args.patch_size,
             dim=args.dim, depth=args.depth, num_heads=args.num_heads,
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
+            use_self_cond=args.self_cond,
         ).to(device)
     else:
         model = WaveFieldDenoiser(
@@ -240,11 +245,13 @@ def main():
             dim=args.dim, depth=args.depth, num_heads=args.num_heads,
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
             use_2d_kernel=use_2d,
+            use_self_cond=args.self_cond,
         ).to(device)
 
     print(f"Parameters: {model.param_count():,}")
     print(f"Patches: {model.num_patches}  (patch_size={args.patch_size})  "
-          f"attn={args.attn}  kernel={'2D' if use_2d else '1D'}")
+          f"attn={args.attn}  kernel={'2D' if use_2d else '1D'}  "
+          f"self_cond={args.self_cond}")
 
     # Save config
     with open(os.path.join(args.save_dir, "config.json"), "w") as f:

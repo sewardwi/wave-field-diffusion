@@ -36,9 +36,10 @@ OUT_DIR = os.path.dirname(__file__)   # save into comparison/ itself
 OUTPUTS = os.path.join(os.path.dirname(__file__), "..", "outputs")
 
 RUNS = {
-    "A: Wave + Physics":      os.path.join(OUTPUTS, "mnist_v6_physics",       "checkpoint_epoch0300.pt"),
-    "B: Standard + Physics":  os.path.join(OUTPUTS, "mnist_standard_physics", "checkpoint_epoch0300.pt"),
-    "C: Standard + AdaLN":    os.path.join(OUTPUTS, "mnist_standard",         "checkpoint_epoch0300.pt"),
+    "A: Wave + Physics":         os.path.join(OUTPUTS, "mnist_v6_physics",       "checkpoint_epoch0300.pt"),
+    "B: Standard + Physics":     os.path.join(OUTPUTS, "mnist_standard_physics", "checkpoint_epoch0300.pt"),
+    "C: Standard + AdaLN":       os.path.join(OUTPUTS, "mnist_standard",         "checkpoint_epoch0300.pt"),
+    "D: Wave + Physics + SelfC": os.path.join(OUTPUTS, "mnist_v7_selfcond",      "checkpoint_epoch0300.pt"),
 }
 
 
@@ -57,6 +58,7 @@ def load_model(ckpt_path: str, device):
         num_heads=a["num_heads"], timestep_dim=a["timestep_dim"],
         conditioning=a["conditioning"],
         use_2d_kernel=(a.get("kernel", "1d") == "2d"),
+        use_self_cond=a.get("self_cond", False),
     )
 
     # Swap in standard attention if checkpoint was trained with --attn standard
@@ -124,7 +126,8 @@ def main():
     n_runs = len(models)
     colors = {"A: Wave + Physics": "#1f77b4",
               "B: Standard + Physics": "#ff7f0e",
-              "C: Standard + AdaLN": "#2ca02c"}
+              "C: Standard + AdaLN": "#2ca02c",
+              "D: Wave + Physics + SelfC": "#d62728"}
 
     # -----------------------------------------------------------------------
     # 1. Sample grid (one column per run)
