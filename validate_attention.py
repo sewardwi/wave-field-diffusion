@@ -25,7 +25,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from wave_field.attention import WaveFieldAttention, WaveFieldAttention2D
-from wave_field.model import WaveFieldDenoiser, timestep_sinusoidal
+from wave_field.blocks import timestep_sinusoidal
+from denoisers.image import WaveFieldDenoiser
 
 
 SAVE_DIR = "outputs/phase0"

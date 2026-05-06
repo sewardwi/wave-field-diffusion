@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import torch.nn as nn
-from wave_field.model import WaveFieldDenoiser
+from denoisers.image import WaveFieldDenoiser
 from wave_field.diffusion import DDPMDiffusion, EMA
 
 

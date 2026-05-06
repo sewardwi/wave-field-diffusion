@@ -28,7 +28,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from wave_field.model import WaveFieldDenoiser
+from denoisers.image import WaveFieldDenoiser
 from wave_field.diffusion import DDPMDiffusion
 from train_mnist import StandardAttention
 
