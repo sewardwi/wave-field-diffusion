@@ -1,0 +1,89 @@
+{
+  "task": "MNIST unconditional generation",
+  "image_size": 28,
+  "channels": 1,
+  "training": {
+    "epochs": 300,
+    "batch_size": 128,
+    "lr": 1e-4,
+    "schedule": "cosine",
+    "parameterization": "v",
+    "ddim_steps": 50,
+    "ema_decay": 0.9999,
+    "patch_size": 4,
+    "dim": 128,
+    "depth": 4,
+    "num_heads": 4,
+    "timestep_dim": 128
+  },
+  "metric": {
+    "name": "Frechet MNIST Distance (classifier-based)",
+    "feature_extractor": "MNISTClassifier (metrics/classifier.py)",
+    "feature_extractor_weights": "metrics/weights/mnist_classifier.pt",
+    "feature_extractor_test_acc": 0.943,
+    "embedding_dim": 64,
+    "n_real": 10000,
+    "n_generated": 10000,
+    "implementation": "metrics/evaluate.py"
+  },
+  "runs": [
+    {
+      "id": "A",
+      "name": "wave + physics + self-cond",
+      "attention": "wave (2D radial FFT)",
+      "conditioning": "physics",
+      "self_cond": true,
+      "params": 1276800,
+      "final_train_loss": 0.02359,
+      "low_t_mse": 3.5263,
+      "frechet_mnist_distance": 2.194,
+      "confident_accuracy": 0.917,
+      "class_entropy": 2.286,
+      "class_entropy_uniform": 2.303,
+      "checkpoint": "outputs/mnist_v7_selfcond/checkpoint_epoch0300.pt"
+    },
+    {
+      "id": "B",
+      "name": "standard + physics",
+      "attention": "softmax",
+      "conditioning": "physics",
+      "self_cond": false,
+      "params": 1191952,
+      "final_train_loss": 0.02305,
+      "low_t_mse": 3.8525,
+      "frechet_mnist_distance": 4.178,
+      "confident_accuracy": 0.890,
+      "class_entropy": 2.292,
+      "class_entropy_uniform": 2.303,
+      "checkpoint": "outputs/mnist_standard_physics/checkpoint_epoch0300.pt"
+    },
+    {
+      "id": "C",
+      "name": "standard + AdaLN",
+      "attention": "softmax",
+      "conditioning": "AdaLN-Zero",
+      "self_cond": false,
+      "params": 1354768,
+      "final_train_loss": 0.02272,
+      "low_t_mse": 5.9188,
+      "frechet_mnist_distance": 4.803,
+      "confident_accuracy": 0.892,
+      "class_entropy": 2.292,
+      "class_entropy_uniform": 2.303,
+      "checkpoint": "outputs/mnist_standard_adaln/checkpoint_epoch0300.pt"
+    }
+  ],
+  "caveats": [
+    "Run A uses self-conditioning (Chen 2022); runs B and C do not. Self-conditioning is known to substantially improve diffusion sample quality, so A's FMD advantage cannot be cleanly attributed to wave kernels alone. Within the matched no-self-cond cohort (B vs C), physics conditioning gives ~15% better FMD than AdaLN — the opposite of the CIFAR result."
+  ],
+  "headline_findings": [
+    "Within the no-self-cond cohort (B vs C), physics conditioning beats AdaLN on FMD by ~15%.",
+    "This is the opposite of the CIFAR ranking, where AdaLN beats physics on FID. The two datasets disagree on which conditioning helps sample quality.",
+    "Run A (wave + physics + self-cond) achieves FMD 2.19, the best in the project — but the self-cond confound prevents a clean attribution to the wave kernel.",
+    "All three configurations produce near-uniform class distributions (entropy ≈ 2.29 vs uniform 2.30) — no mode collapse on MNIST."
+  ],
+  "provenance": {
+    "git_commit": "076659d",
+    "eval_date": "2026-05-19"
+  }
+}

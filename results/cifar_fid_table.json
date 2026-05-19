@@ -1,0 +1,83 @@
+{
+  "task": "CIFAR-10 unconditional generation",
+  "image_size": 32,
+  "channels": 3,
+  "training": {
+    "epochs": 200,
+    "batch_size": 128,
+    "lr": 1e-4,
+    "schedule": "cosine",
+    "parameterization": "v",
+    "ddim_steps": 50,
+    "ema_decay": 0.9999,
+    "self_cond": true,
+    "patch_size": 4,
+    "dim": 256,
+    "depth": 6,
+    "num_heads": 8,
+    "timestep_dim": 256
+  },
+  "metric": {
+    "name": "FID (clean-fid)",
+    "feature_extractor": "Inception V3",
+    "n_real": 50000,
+    "n_generated": 10000,
+    "real_source": "CIFAR-10 train (torchvision)",
+    "implementation": "metrics/evaluate.py (dir-vs-dir mode, CPU)"
+  },
+  "runs": [
+    {
+      "id": "A",
+      "name": "wave + physics",
+      "attention": "wave (2D radial FFT)",
+      "conditioning": "physics (kernel α/ω/φ + FFN FiLM + residual gates)",
+      "params": 7333120,
+      "final_train_loss": 0.02709,
+      "low_t_mse": 2.6966,
+      "fid": 87.928,
+      "checkpoint": "outputs/cifar_wave_physics_2d_sc/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "B",
+      "name": "standard + physics",
+      "attention": "softmax",
+      "conditioning": "physics",
+      "params": 6876208,
+      "final_train_loss": 0.02584,
+      "low_t_mse": 2.5975,
+      "fid": 63.745,
+      "checkpoint": "outputs/cifar_standard_physics_sc/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "C",
+      "name": "wave + AdaLN",
+      "attention": "wave (2D radial FFT)",
+      "conditioning": "AdaLN-Zero (DiT-style)",
+      "params": 7815792,
+      "final_train_loss": 0.02695,
+      "low_t_mse": 3.9875,
+      "fid": 81.954,
+      "checkpoint": "outputs/cifar_wave_adaln_2d_sc/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "D",
+      "name": "standard + AdaLN",
+      "attention": "softmax",
+      "conditioning": "AdaLN-Zero (DiT-style)",
+      "params": 7790640,
+      "final_train_loss": 0.02555,
+      "low_t_mse": 4.8542,
+      "fid": 56.350,
+      "checkpoint": "outputs/cifar_standard_adaln_sc/checkpoint_epoch0200.pt"
+    }
+  ],
+  "headline_findings": [
+    "Standard attention beats wave attention on FID at every conditioning level (D < C by 26, B < A by 24).",
+    "AdaLN beats physics conditioning on FID (D < B by 7, C < A by 6) — opposite of what per-timestep MSE indicated.",
+    "FID and per-timestep MSE disagree: physics conditioning fits individual (x_t, t) pairs better but produces less-realistic sample distributions."
+  ],
+  "provenance": {
+    "git_commit": "076659d",
+    "eval_date": "2026-05-19"
+  }
+}

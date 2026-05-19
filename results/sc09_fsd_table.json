@@ -1,0 +1,90 @@
+{
+  "task": "SC09 unconditional audio generation (spoken digits, 16 kHz, 1.024 s clips)",
+  "sequence_length": 16384,
+  "tokens_per_clip": 1024,
+  "status": "pending",
+  "rationale": "This is the only experiment in the project that probes a sequence length where wave-field's O(n log n) scaling has a real wall-clock advantage over O(n²) softmax. CIFAR at 64 tokens is too short for the asymptotic crossover (see benchmarks/attn_benchmark.png — wave field is ~7× faster than softmax at L=2048).",
+  "training": {
+    "epochs": 200,
+    "batch_size": 32,
+    "lr": 1e-4,
+    "schedule": "cosine",
+    "parameterization": "v",
+    "ddim_steps": 50,
+    "ema_decay": 0.9999,
+    "self_cond": true,
+    "patch_size": 16,
+    "dim": 128,
+    "depth": 6,
+    "num_heads": 4,
+    "timestep_dim": 128
+  },
+  "metric": {
+    "name": "Frechet SC09 Distance",
+    "feature_extractor": "SC09Classifier (metrics/classifier.py)",
+    "feature_extractor_weights": "metrics/weights/sc09_classifier.pt",
+    "feature_extractor_val_acc": 0.915,
+    "n_real": 2000,
+    "n_generated_during_training": 1000,
+    "n_generated_final": 10000,
+    "implementation": "metrics/evaluate.py + train_audio.py (in-training logging)"
+  },
+  "additional_readouts": [
+    "confident_accuracy: fraction of generated clips classified as a digit with confidence > 0.5",
+    "class_entropy: Shannon entropy of predicted-class histogram (uniform = log(10) ≈ 2.303 — catches mode collapse)",
+    "mel_distribution: side-by-side mean log-mel spectrogram, real vs generated vs difference"
+  ],
+  "runs": [
+    {
+      "id": "A",
+      "name": "wave + physics",
+      "attention": "wave (1D FFT)",
+      "conditioning": "physics",
+      "fsd": null,
+      "confident_accuracy": null,
+      "class_entropy": null,
+      "wall_clock_per_step_ms": null,
+      "checkpoint": "outputs/sc09_wave_physics/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "B",
+      "name": "standard + physics",
+      "attention": "softmax",
+      "conditioning": "physics",
+      "fsd": null,
+      "confident_accuracy": null,
+      "class_entropy": null,
+      "wall_clock_per_step_ms": null,
+      "checkpoint": "outputs/sc09_standard_physics/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "C",
+      "name": "wave + AdaLN",
+      "attention": "wave (1D FFT)",
+      "conditioning": "AdaLN-Zero",
+      "fsd": null,
+      "confident_accuracy": null,
+      "class_entropy": null,
+      "wall_clock_per_step_ms": null,
+      "checkpoint": "outputs/sc09_wave_adaln/checkpoint_epoch0200.pt"
+    },
+    {
+      "id": "D",
+      "name": "standard + AdaLN",
+      "attention": "softmax",
+      "conditioning": "AdaLN-Zero",
+      "fsd": null,
+      "confident_accuracy": null,
+      "class_entropy": null,
+      "wall_clock_per_step_ms": null,
+      "checkpoint": "outputs/sc09_standard_adaln/checkpoint_epoch0200.pt"
+    }
+  ],
+  "to_run": [
+    "python train_audio.py --attn wave     --conditioning physics --save_dir outputs/sc09_wave_physics",
+    "python train_audio.py --attn standard --conditioning physics --save_dir outputs/sc09_standard_physics",
+    "python train_audio.py --attn wave     --conditioning adaln   --save_dir outputs/sc09_wave_adaln",
+    "python train_audio.py --attn standard --conditioning adaln   --save_dir outputs/sc09_standard_adaln",
+    "python -m metrics.evaluate outputs/sc09_<...> --n_samples 10000   # for each run"
+  ]
+}

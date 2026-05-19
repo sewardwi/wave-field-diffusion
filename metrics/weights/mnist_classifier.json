@@ -1,0 +1,7 @@
+{
+  "test_acc": 0.9432,
+  "epochs": 5,
+  "params": 23946,
+  "batch_size": 128,
+  "lr": 0.001
+}
