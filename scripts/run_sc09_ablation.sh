@@ -106,6 +106,7 @@ for entry in "${RUNS[@]}"; do
     python train_audio.py \
         --attn "$attn" --conditioning "$cond" \
         --save_dir "$save_dir" \
+        --epochs 100 --batch_size 64 \
         2>&1 | tee "${save_dir}/training.log"
 
     if [ "$SKIP_EVAL" = "1" ]; then
