@@ -129,10 +129,13 @@ fi
 # a smoke test never shuts the pod down. The EXIT trap fires on success AND on
 # failure — combined with AUTOPUSH (per-config), completed results are already
 # pushed before the pod goes away. Disarm with Ctrl-C if you want to keep the box.
+#
+# Terminates via the RunPod GraphQL API with curl (runpodctl's auth is flaky;
+# curl with $RUNPOD_API_KEY is the reliable path). The EXIT trap does a final
+# safety push of ALL result artifacts and only removes the pod if that push
+# succeeds — so a broken token can never delete the box with unsaved results
+# (worst case: pod stays up, you pay, nothing is lost).
 # -----------------------------------------------------------------------------
-# The EXIT trap below does a final safety push of ALL result artifacts and only
-# removes the pod if that push succeeds — so a broken token can never delete the
-# box with unsaved results (worst case: pod stays up, you pay, nothing is lost).
 shutdown_trap() {
     local code=$?
     echo
@@ -145,23 +148,27 @@ shutdown_trap() {
             commit -m "SC09 results: final [auto]" >/dev/null 2>&1 || true
         if ! git push 2>&1 | tail -2; then
             echo "FINAL PUSH FAILED — NOT terminating pod so results aren't lost."
-            echo "Fix the token / rsync manually, then 'runpodctl remove pod ${RUNPOD_POD_ID}'."
+            echo "Fix the token / rsync manually, then terminate the pod from the web console."
             return
         fi
     fi
-    echo "Terminating pod ${RUNPOD_POD_ID} to stop billing…"
-    runpodctl remove pod "$RUNPOD_POD_ID"
+    echo "Terminating pod ${RUNPOD_POD_ID} via RunPod API to stop billing…"
+    local payload
+    payload=$(printf '{"query":"mutation{podTerminate(input:{podId:\\"%s\\"})}"}' "$RUNPOD_POD_ID")
+    curl -s -H "Content-Type: application/json" \
+        "https://api.runpod.io/graphql?api_key=${RUNPOD_API_KEY}" -d "$payload"
+    echo
 }
 
 if [ "$SHUTDOWN" = "1" ]; then
-    if ! command -v runpodctl >/dev/null 2>&1; then
-        echo "WARNING: SHUTDOWN=1 but runpodctl not found — pod will NOT self-terminate."
-    elif [ -z "${RUNPOD_POD_ID:-}" ]; then
+    if [ -z "${RUNPOD_POD_ID:-}" ]; then
         echo "WARNING: SHUTDOWN=1 but \$RUNPOD_POD_ID is unset — pod will NOT self-terminate."
+    elif [ -z "${RUNPOD_API_KEY:-}" ]; then
+        echo "WARNING: SHUTDOWN=1 but \$RUNPOD_API_KEY is unset — pod will NOT self-terminate."
     else
         [ "$AUTOPUSH" = "1" ] || echo "WARNING: SHUTDOWN=1 without AUTOPUSH=1 — results are NOT saved off-pod before termination."
         trap shutdown_trap EXIT
-        echo "Self-terminate armed: pod ${RUNPOD_POD_ID} will be removed when this script exits."
+        echo "Self-terminate armed: pod ${RUNPOD_POD_ID} will be terminated via RunPod API when this script exits."
     fi
 fi
 
