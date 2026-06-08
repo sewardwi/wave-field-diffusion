@@ -171,14 +171,19 @@ class WaveFieldAttention(nn.Module):
         # Build kernel and FFT-convolve V along sequence dimension
         kernel, batched = self._build_kernel(t_emb)
 
-        V_fft = torch.fft.rfft(v, n=L, dim=2)          # (B, H, L//2+1, Dh)
+        # FFT convolution runs in fp32: torch.fft has no bf16/fp16 kernels, so
+        # under autocast `v`/`kernel` arrive as half precision and rfft raises.
+        # Cast the FFT operands up and restore the surrounding dtype afterwards.
+        in_dtype = v.dtype
+        V_fft = torch.fft.rfft(v.float(), n=L, dim=2)  # (B, H, L//2+1, Dh)
 
         # Frequency-domain content modulation: scale V's spectrum per-head
         # using a global content summary. Identity-init via 1 + tanh(...).
         content_summary = x.mean(dim=1)                              # (B, D)
-        freq_scale = 1.0 + torch.tanh(self.freq_mod(content_summary))  # (B, H)
+        freq_scale = (1.0 + torch.tanh(self.freq_mod(content_summary))).float()  # (B, H)
         V_fft = V_fft * freq_scale[:, :, None, None]                 # broadcast
 
+        kernel = kernel.float()
         if batched:
             k_fft = torch.fft.rfft(kernel, n=L, dim=2) # (B, H, L//2+1)
             out_fft = V_fft * k_fft.unsqueeze(-1)       # (B, H, L//2+1, Dh)
@@ -186,7 +191,7 @@ class WaveFieldAttention(nn.Module):
             k_fft = torch.fft.rfft(kernel, n=L, dim=1) # (H, L//2+1)
             out_fft = V_fft * k_fft[None, :, :, None]  # (B, H, L//2+1, Dh)
 
-        out = torch.fft.irfft(out_fft, n=L, dim=2)     # (B, H, L, Dh)
+        out = torch.fft.irfft(out_fft, n=L, dim=2).to(in_dtype)   # (B, H, L, Dh)
 
         # Q⊙K content-dependent gating (no full attention matrix)
         gate = torch.sigmoid(self.gate_q(q) * self.gate_k(k))   # (B, H, L, Dh)
@@ -338,26 +343,28 @@ class WaveFieldAttention2D(nn.Module):
 
         # Reshape v to 2D spatial, then permute for rfft2: (B, H, Dh, Gy, Gx)
         v_2d = v.view(B, H, Gy, Gx, Dh).permute(0, 1, 4, 2, 3)
-        V_fft = torch.fft.rfft2(v_2d, s=(Gy, Gx))    # (B, H, Dh, Gy, Gx//2+1)
+
+        # FFT convolution runs in fp32: torch.fft has no bf16/fp16 kernels, so
+        # under autocast `v`/`kernel` arrive as half precision and rfft2 raises.
+        in_dtype = v.dtype
+        V_fft = torch.fft.rfft2(v_2d.float(), s=(Gy, Gx))    # (B, H, Dh, Gy, Gx//2+1)
 
         # Frequency-domain content modulation
         content_summary = x.mean(dim=1)                              # (B, D)
-        freq_scale = 1.0 + torch.tanh(self.freq_mod(content_summary))  # (B, H)
+        freq_scale = (1.0 + torch.tanh(self.freq_mod(content_summary))).float()  # (B, H)
         V_fft = V_fft * freq_scale[:, :, None, None, None]
 
         kernel, batched = self._build_kernel_2d(t_emb)
-
+        k_fft = torch.fft.rfft2(kernel.float(), s=(Gy, Gx))
         if batched:
             # kernel: (B, H, Gy, Gx) → rfft2 → (B, H, Gy, Gx//2+1)
-            k_fft = torch.fft.rfft2(kernel, s=(Gy, Gx))
             # Broadcast over Dh: (B, H, 1, Gy, Gx//2+1)
             out_fft = V_fft * k_fft[:, :, None, :, :]
         else:
             # kernel: (H, Gy, Gx) → rfft2 → (H, Gy, Gx//2+1)
-            k_fft = torch.fft.rfft2(kernel, s=(Gy, Gx))
             out_fft = V_fft * k_fft[None, :, None, :, :]
 
-        out_2d = torch.fft.irfft2(out_fft, s=(Gy, Gx))   # (B, H, Dh, Gy, Gx)
+        out_2d = torch.fft.irfft2(out_fft, s=(Gy, Gx)).to(in_dtype)   # (B, H, Dh, Gy, Gx)
 
         # Back to (B, H, Gy, Gx, Dh) for gating
         out_2d = out_2d.permute(0, 1, 3, 4, 2)

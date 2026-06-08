@@ -68,7 +68,7 @@ print(f'CUDA: {torch.version.cuda}  device: {torch.cuda.get_device_name(0)}  '
 if [ ! -d "data/SpeechCommands/speech_commands_v0.02" ]; then
     echo
     echo "=== Pre-fetching SC09 (~2.3 GB) ==="
-    python -c "from datasets.sc09 import SC09; SC09(root='./data', subset='training')"
+    python -c "from datasets.sc09 import SC09; SC09(root='./data', subset='training', cache=False)"
 fi
 
 # Classifier weights ship with the repo, but verify and re-train if missing
