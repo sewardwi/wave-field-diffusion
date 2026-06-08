@@ -2,8 +2,8 @@
   "attn": "wave",
   "conditioning": "physics",
   "epochs": 100,
-  "batch_size": 256,
-  "lr": 0.0004,
+  "batch_size": 64,
+  "lr": 0.0001,
   "dim": 128,
   "depth": 6,
   "num_heads": 4,
@@ -22,5 +22,5 @@
   "classifier_weights": "metrics/weights/sc09_classifier.pt",
   "seed": 42,
   "amp": true,
-  "fast": true
+  "fast": false
 }
