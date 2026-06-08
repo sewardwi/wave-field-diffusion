@@ -35,6 +35,14 @@ set -euo pipefail
 # cd to repo root regardless of where this script is invoked from
 cd "$(dirname "$0")/.."
 
+# Mirror ALL output (this script's orchestration + every Python subprocess +
+# any crash traceback) into a master log under outputs/, so AUTOPUSH can ship it
+# to GitHub. The pod has no persistent volume — nothing survives SHUTDOWN — so
+# the log must live in the repo, not on the pod. Fresh file per run.
+mkdir -p outputs
+: > outputs/run_master.log
+exec > >(tee -a outputs/run_master.log) 2>&1
+
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
@@ -57,8 +65,12 @@ autopush_results() {
     local dir="$1"
     echo
     echo "=== Auto-push results for ${dir} ==="
+    # Push the full logs (per-config training.log + the master run log) to GitHub
+    # so nothing is lost when the ephemeral pod is torn down. Checkpoints/.wav are
+    # still too big for git and stay on the pod.
     git add -f "${dir}/metrics.json" "${dir}/metric_history.json" \
-               "${dir}/config.json" "${dir}"/*.png 2>/dev/null || true
+               "${dir}/config.json" "${dir}/training.log" "${dir}"/*.png \
+               outputs/run_master.log 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
         echo "  (nothing new to commit)"
         return 0
@@ -141,9 +153,10 @@ shutdown_trap() {
     echo
     echo "=== Run ended (exit ${code}) ==="
     if [ "$AUTOPUSH" = "1" ]; then
-        echo "Final safety push of all results before terminating…"
+        echo "Final safety push of all results + full logs before terminating…"
         git add -f outputs/sc09_*/metrics.json outputs/sc09_*/metric_history.json \
-                   outputs/sc09_*/config.json outputs/sc09_*/*.png 2>/dev/null || true
+                   outputs/sc09_*/config.json outputs/sc09_*/training.log \
+                   outputs/sc09_*/*.png outputs/run_master.log 2>/dev/null || true
         git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
             commit -m "SC09 results: final [auto]" >/dev/null 2>&1 || true
         if ! git push 2>&1 | tail -2; then
@@ -198,14 +211,18 @@ for entry in "${RUNS[@]}"; do
     else
         train_args+=(--batch_size 64)
     fi
-    python train_audio.py "${train_args[@]}" 2>&1 | tee "${save_dir}/training.log"
+    # A single config's crash (e.g. OOM) must NOT abort the whole ablation. Catch
+    # the failure, push its log so the error is visible off-pod, and continue.
+    if ! python train_audio.py "${train_args[@]}" 2>&1 | tee "${save_dir}/training.log"; then
+        echo "!!! Training FAILED for ${attn}_${cond} — see ${save_dir}/training.log. Continuing to next config."
+        autopush_results "$save_dir"
+        continue
+    fi
 
     if [ "$SKIP_EVAL" = "1" ]; then
         echo "    (skipping 10k-sample eval — SKIP_EVAL=1)"
-    else
-        echo
-        echo "=== Final ${N_EVAL_SAMPLES}-sample FSD eval: ${save_dir} ==="
-        python -m metrics.evaluate "$save_dir" --n_samples "$N_EVAL_SAMPLES"
+    elif ! python -m metrics.evaluate "$save_dir" --n_samples "$N_EVAL_SAMPLES"; then
+        echo "!!! Eval FAILED for ${attn}_${cond} — continuing to next config."
     fi
 
     autopush_results "$save_dir"
