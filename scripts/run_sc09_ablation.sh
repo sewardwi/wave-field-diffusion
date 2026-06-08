@@ -18,9 +18,15 @@
 #
 # Usage:
 #   bash scripts/run_sc09_ablation.sh                          # full pipeline
+#   FAST=1 bash scripts/run_sc09_ablation.sh                   # big-GPU preset (bs=256, lr=4e-4)
+#   EPOCHS=150 bash scripts/run_sc09_ablation.sh               # override epoch count
 #   SMOKE=1 bash scripts/run_sc09_ablation.sh                  # 3-epoch smoke test only
 #   N_EVAL_SAMPLES=5000 bash scripts/run_sc09_ablation.sh      # cheaper final FSD
 #   SKIP_EVAL=1 bash scripts/run_sc09_ablation.sh              # train only, no 10k eval
+#
+# Speed: the dataset is cached in RAM and training/sampling use bf16 autocast
+# on CUDA automatically. FAST=1 adds a batch-size/LR preset for further speedup
+# (fewer, larger gradient steps — pair with a higher EPOCHS if undertrained).
 
 set -euo pipefail
 
@@ -33,6 +39,8 @@ cd "$(dirname "$0")/.."
 SMOKE="${SMOKE:-0}"
 SKIP_EVAL="${SKIP_EVAL:-0}"
 N_EVAL_SAMPLES="${N_EVAL_SAMPLES:-10000}"
+EPOCHS="${EPOCHS:-100}"
+FAST="${FAST:-0}"
 
 # attention:conditioning pairs to run
 RUNS=(
@@ -103,11 +111,15 @@ for entry in "${RUNS[@]}"; do
     echo "=== Training: attn=${attn}  conditioning=${cond} ==="
     echo "    → ${save_dir}"
     mkdir -p "$save_dir"
-    python train_audio.py \
-        --attn "$attn" --conditioning "$cond" \
-        --save_dir "$save_dir" \
-        --epochs 100 --batch_size 64 \
-        2>&1 | tee "${save_dir}/training.log"
+
+    # FAST preset lets train_audio.py pick batch_size/lr; otherwise pin bs=64.
+    train_args=(--attn "$attn" --conditioning "$cond" --save_dir "$save_dir" --epochs "$EPOCHS")
+    if [ "$FAST" = "1" ]; then
+        train_args+=(--fast)
+    else
+        train_args+=(--batch_size 64)
+    fi
+    python train_audio.py "${train_args[@]}" 2>&1 | tee "${save_dir}/training.log"
 
     if [ "$SKIP_EVAL" = "1" ]; then
         echo "    (skipping 10k-sample eval — SKIP_EVAL=1)"

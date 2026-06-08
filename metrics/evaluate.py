@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -151,17 +152,22 @@ def generate_samples(
     ddim_steps: int,
 ) -> torch.Tensor:
     """Generate n_total samples in batches of batch_size. Returns CPU tensor."""
+    # bf16 autocast on CUDA tensor cores ~halves sampling wall-clock; no-op
+    # elsewhere. FFT ops stay fp32 under autocast, so the wave path is safe.
+    amp_ctx = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+               if device.type == "cuda" else nullcontext())
     chunks = []
     n_done = 0
     pbar = tqdm(total=n_total, desc=f"Generating {n_total} samples")
-    while n_done < n_total:
-        b = min(batch_size, n_total - n_done)
-        shape = (b,) + tuple(sample_shape)
-        x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
-                                   eta=0.0, progress=False)
-        chunks.append(x.detach().cpu())
-        n_done += b
-        pbar.update(b)
+    with amp_ctx:
+        while n_done < n_total:
+            b = min(batch_size, n_total - n_done)
+            shape = (b,) + tuple(sample_shape)
+            x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
+                                       eta=0.0, progress=False)
+            chunks.append(x.detach().cpu())
+            n_done += b
+            pbar.update(b)
     pbar.close()
     return torch.cat(chunks, dim=0)
 
@@ -181,7 +187,9 @@ def real_mnist_tensor(n: int) -> torch.Tensor:
 def real_sc09_tensor(n: int) -> torch.Tensor:
     """Return n real SC09 clips, shape (n, 1, 16384) in [-1, 1]."""
     from datasets.sc09 import SC09
-    ds = SC09(root="./data", subset="training")
+    # We only need a random subset, so skip the full RAM cache (which would
+    # decode all ~31k clips up front just to read n of them).
+    ds = SC09(root="./data", subset="training", cache=False)
     idx = torch.randperm(len(ds))[:n]
     return torch.stack([ds[i][0] for i in idx], dim=0)
 

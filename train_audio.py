@@ -23,6 +23,7 @@ import argparse
 import os
 import math
 import json
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -123,7 +124,18 @@ def get_args():
     p.add_argument("--classifier_weights", default="metrics/weights/sc09_classifier.pt",
                    help="Path to trained SC09 classifier (feature extractor for FSD).")
     p.add_argument("--seed", type=int, default=42)
-    return p.parse_args()
+    p.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True,
+                   help="bf16 autocast for training + sampling (CUDA only; ignored "
+                        "on CPU/MPS where it has no benefit or support).")
+    p.add_argument("--fast", action="store_true",
+                   help="Throughput preset for big GPUs: batch_size=256, lr=4e-4. "
+                        "Fewer, larger gradient steps — speeds wall-clock at the "
+                        "cost of fewer updates per epoch (consider more epochs).")
+    args = p.parse_args()
+    if args.fast:
+        args.batch_size = 256
+        args.lr = 4e-4
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -321,15 +333,25 @@ def main():
               else torch.device("cpu"))
     print(f"Device: {device}")
 
+    # bf16 autocast pays off on CUDA tensor cores; on CPU/MPS it's a no-op
+    # (no benefit / patchy bf16 support), so gate it to keep those paths fp32.
+    use_amp = args.amp and device.type == "cuda"
+    amp_ctx = (lambda: torch.autocast(device_type="cuda", dtype=torch.bfloat16)) \
+        if use_amp else nullcontext
+    print(f"AMP (bf16 autocast): {use_amp}")
+
     # ------------------------------------------------------------------
     # Dataset
     # ------------------------------------------------------------------
     print("Loading SC09 (digit subset of Speech Commands)…")
     train_ds = SC09(root="./data", subset="training")
     print(f"  → {len(train_ds)} training clips")
+    # Dataset is cached in RAM, so __getitem__ is a trivial index. Worker
+    # processes would each copy the ~2GB cache and add IPC overhead for no
+    # gain, so load in the main process (num_workers=0).
     loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=min(4, os.cpu_count()), pin_memory=(device.type != "cpu"),
+        num_workers=0, pin_memory=(device.type == "cuda"),
         drop_last=True,
     )
 
@@ -374,7 +396,8 @@ def main():
         for x, _ in pbar:
             x = x.to(device)                                     # (B, 1, L)
             t = torch.randint(0, args.num_timesteps, (x.shape[0],), device=device)
-            loss = diffusion.p_losses(model, x, t)
+            with amp_ctx():
+                loss = diffusion.p_losses(model, x, t)
 
             optimizer.zero_grad()
             loss.backward()
@@ -397,7 +420,7 @@ def main():
             ema.ema_model.eval()
 
             # (a) small batch saved as listenable .wav grid (visual / audible debug)
-            with torch.no_grad():
+            with torch.no_grad(), amp_ctx():
                 shape = (args.n_samples, 1, TARGET_LEN)
                 if args.ddim_steps > 0:
                     listen_samples = diffusion.ddim_sample(
@@ -413,12 +436,13 @@ def main():
             if classifier is not None:
                 feats_real, real_audio = real_pack
                 print(f"  generating {args.n_metric_samples} samples for FSD…")
-                metric_samples = generate_batched(
-                    diffusion, ema.ema_model,
-                    n_total=args.n_metric_samples,
-                    batch_size=max(8, args.batch_size),
-                    device=device, ddim_steps=args.ddim_steps,
-                )
+                with amp_ctx():
+                    metric_samples = generate_batched(
+                        diffusion, ema.ema_model,
+                        n_total=args.n_metric_samples,
+                        batch_size=max(8, args.batch_size),
+                        device=device, ddim_steps=args.ddim_steps,
+                    )
                 feats_gen = extract_features(classifier, metric_samples.clamp(-1, 1),
                                               batch_size=128, device=device)
                 fsd = frechet_distance(feats_real, feats_gen)

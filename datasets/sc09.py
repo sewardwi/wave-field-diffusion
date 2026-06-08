@@ -34,7 +34,8 @@ class SC09(Dataset):
         device:  optional pre-load to GPU memory if dataset fits
     """
 
-    def __init__(self, root: str = "./data", subset: str = "training"):
+    def __init__(self, root: str = "./data", subset: str = "training",
+                 cache: bool = True):
         super().__init__()
         os.makedirs(root, exist_ok=True)
         # torchaudio's SPEECHCOMMANDS auto-downloads; we filter to digit classes
@@ -62,6 +63,15 @@ class SC09(Dataset):
 
         self._resamplers = {}   # cache resamplers per source sample rate
 
+        # Optionally decode the whole (small, ~2GB) dataset into a RAM tensor
+        # once, so __getitem__ becomes a cheap index instead of a per-epoch
+        # disk read + resample. This is the single biggest training speedup on
+        # a fast GPU, which otherwise sits idle waiting on CPU audio decoding.
+        self._cache = None
+        self._labels = None
+        if cache:
+            self._build_cache()
+
     def _get_resampler(self, sr: int) -> torchaudio.transforms.Resample:
         if sr not in self._resamplers:
             self._resamplers[sr] = torchaudio.transforms.Resample(
@@ -69,11 +79,8 @@ class SC09(Dataset):
             )
         return self._resamplers[sr]
 
-    def __len__(self) -> int:
-        return len(self.items)
-
-    def __getitem__(self, idx: int):
-        path, label = self.items[idx]
+    def _decode(self, path: str) -> torch.Tensor:
+        """Read one .wav → mono, 16 kHz, exactly TARGET_LEN samples, peak-normed."""
         # soundfile reads .wav natively (torchaudio.load now needs torchcodec)
         data, sr = sf.read(path, dtype="float32", always_2d=True)   # (samples, channels)
         wav = torch.from_numpy(np.ascontiguousarray(data.T))         # (channels, samples)
@@ -95,6 +102,25 @@ class SC09(Dataset):
 
         # Normalize peak amplitude into [-1, 1]
         peak = wav.abs().max().clamp(min=1e-8)
-        wav = wav / peak
+        return wav / peak
 
-        return wav, label
+    def _build_cache(self) -> None:
+        n = len(self.items)
+        print(f"  caching {n} clips into RAM "
+              f"(~{n * TARGET_LEN * 4 / 1e9:.1f} GB)…", flush=True)
+        buf = torch.empty(n, 1, TARGET_LEN, dtype=torch.float32)
+        labels = torch.empty(n, dtype=torch.long)
+        for i, (path, label) in enumerate(self.items):
+            buf[i] = self._decode(path)
+            labels[i] = label
+        self._cache = buf
+        self._labels = labels
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, idx: int):
+        if self._cache is not None:
+            return self._cache[idx], int(self._labels[idx])
+        path, label = self.items[idx]
+        return self._decode(path), label
