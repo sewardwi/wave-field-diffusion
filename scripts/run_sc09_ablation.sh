@@ -19,6 +19,8 @@
 # Usage:
 #   bash scripts/run_sc09_ablation.sh                          # full pipeline
 #   FAST=1 bash scripts/run_sc09_ablation.sh                   # big-GPU preset (bs=256, lr=4e-4)
+#   AUTOPUSH=1 FAST=1 bash scripts/run_sc09_ablation.sh        # git-push results after each config
+#   AUTOPUSH=1 SHUTDOWN=1 FAST=1 bash scripts/run_sc09_ablation.sh   # overnight: push + self-terminate pod
 #   EPOCHS=150 bash scripts/run_sc09_ablation.sh               # override epoch count
 #   SMOKE=1 bash scripts/run_sc09_ablation.sh                  # 3-epoch smoke test only
 #   N_EVAL_SAMPLES=5000 bash scripts/run_sc09_ablation.sh      # cheaper final FSD
@@ -41,6 +43,34 @@ SKIP_EVAL="${SKIP_EVAL:-0}"
 N_EVAL_SAMPLES="${N_EVAL_SAMPLES:-10000}"
 EPOCHS="${EPOCHS:-100}"
 FAST="${FAST:-0}"
+AUTOPUSH="${AUTOPUSH:-0}"     # git-commit+push small result files after each config
+SHUTDOWN="${SHUTDOWN:-0}"     # terminate the pod when the run ends (stops billing)
+
+# -----------------------------------------------------------------------------
+# Auto-push results off the pod (so an overnight run is safe without rsync).
+# Force-adds only the small artifacts — outputs/ is gitignored and the big
+# checkpoints/.wav files stay on the pod. Every git call is guarded so a push
+# failure (e.g. bad token) never aborts the run under `set -e`.
+# -----------------------------------------------------------------------------
+autopush_results() {
+    [ "$AUTOPUSH" = "1" ] || return 0
+    local dir="$1"
+    echo
+    echo "=== Auto-push results for ${dir} ==="
+    git add -f "${dir}/metrics.json" "${dir}/metric_history.json" \
+               "${dir}/config.json" "${dir}"/*.png 2>/dev/null || true
+    if git diff --cached --quiet 2>/dev/null; then
+        echo "  (nothing new to commit)"
+        return 0
+    fi
+    git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
+        commit -m "SC09 results: $(basename "$dir") [auto]" >/dev/null 2>&1 || true
+    if git push 2>&1 | tail -2; then
+        echo "  pushed ✓"
+    else
+        echo "  PUSH FAILED — results are still on the pod; check token/remote"
+    fi
+}
 
 # attention:conditioning pairs to run
 RUNS=(
@@ -94,6 +124,48 @@ if [ "$SMOKE" = "1" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+# Self-terminate the pod when the run ends, so an unattended overnight run does
+# not keep billing after it finishes. Armed HERE (after the smoke early-exit) so
+# a smoke test never shuts the pod down. The EXIT trap fires on success AND on
+# failure — combined with AUTOPUSH (per-config), completed results are already
+# pushed before the pod goes away. Disarm with Ctrl-C if you want to keep the box.
+# -----------------------------------------------------------------------------
+# The EXIT trap below does a final safety push of ALL result artifacts and only
+# removes the pod if that push succeeds — so a broken token can never delete the
+# box with unsaved results (worst case: pod stays up, you pay, nothing is lost).
+shutdown_trap() {
+    local code=$?
+    echo
+    echo "=== Run ended (exit ${code}) ==="
+    if [ "$AUTOPUSH" = "1" ]; then
+        echo "Final safety push of all results before terminating…"
+        git add -f outputs/sc09_*/metrics.json outputs/sc09_*/metric_history.json \
+                   outputs/sc09_*/config.json outputs/sc09_*/*.png 2>/dev/null || true
+        git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
+            commit -m "SC09 results: final [auto]" >/dev/null 2>&1 || true
+        if ! git push 2>&1 | tail -2; then
+            echo "FINAL PUSH FAILED — NOT terminating pod so results aren't lost."
+            echo "Fix the token / rsync manually, then 'runpodctl remove pod ${RUNPOD_POD_ID}'."
+            return
+        fi
+    fi
+    echo "Terminating pod ${RUNPOD_POD_ID} to stop billing…"
+    runpodctl remove pod "$RUNPOD_POD_ID"
+}
+
+if [ "$SHUTDOWN" = "1" ]; then
+    if ! command -v runpodctl >/dev/null 2>&1; then
+        echo "WARNING: SHUTDOWN=1 but runpodctl not found — pod will NOT self-terminate."
+    elif [ -z "${RUNPOD_POD_ID:-}" ]; then
+        echo "WARNING: SHUTDOWN=1 but \$RUNPOD_POD_ID is unset — pod will NOT self-terminate."
+    else
+        [ "$AUTOPUSH" = "1" ] || echo "WARNING: SHUTDOWN=1 without AUTOPUSH=1 — results are NOT saved off-pod before termination."
+        trap shutdown_trap EXIT
+        echo "Self-terminate armed: pod ${RUNPOD_POD_ID} will be removed when this script exits."
+    fi
+fi
+
+# -----------------------------------------------------------------------------
 # Run all four ablations
 # -----------------------------------------------------------------------------
 for entry in "${RUNS[@]}"; do
@@ -123,12 +195,13 @@ for entry in "${RUNS[@]}"; do
 
     if [ "$SKIP_EVAL" = "1" ]; then
         echo "    (skipping 10k-sample eval — SKIP_EVAL=1)"
-        continue
+    else
+        echo
+        echo "=== Final ${N_EVAL_SAMPLES}-sample FSD eval: ${save_dir} ==="
+        python -m metrics.evaluate "$save_dir" --n_samples "$N_EVAL_SAMPLES"
     fi
 
-    echo
-    echo "=== Final ${N_EVAL_SAMPLES}-sample FSD eval: ${save_dir} ==="
-    python -m metrics.evaluate "$save_dir" --n_samples "$N_EVAL_SAMPLES"
+    autopush_results "$save_dir"
 done
 
 # -----------------------------------------------------------------------------
