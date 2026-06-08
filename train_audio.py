@@ -29,6 +29,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchaudio
+import soundfile as sf
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -135,10 +136,11 @@ def save_audio_grid(samples: torch.Tensor, out_dir: str, prefix: str):
     samples = samples.clamp(-1, 1).cpu()
     n = samples.shape[0]
 
-    # Save individual wav files
+    # Save individual wav files. soundfile writes .wav natively; torchaudio.save
+    # now routes through torchcodec (not installed) and would crash here.
     for i in range(n):
         path = os.path.join(out_dir, f"{prefix}_{i:02d}.wav")
-        torchaudio.save(path, samples[i], TARGET_SR)
+        sf.write(path, samples[i, 0].numpy(), TARGET_SR)   # (L,) mono, float in [-1, 1]
 
     # Waveform + log-mel spectrogram grid
     fig, axes = plt.subplots(2, n, figsize=(2.5 * n, 5), squeeze=False)
