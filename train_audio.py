@@ -111,6 +111,10 @@ def get_args():
     p.add_argument("--save_dir", default="outputs/sc09")
     p.add_argument("--sample_every", type=int, default=10)
     p.add_argument("--ddim_steps", type=int, default=50)
+    p.add_argument("--eta", type=float, default=0.0,
+                   help="DDIM stochasticity for sampling. 0=deterministic, 1=full "
+                        "DDPM variance. >0 injects noise each step, which can break "
+                        "a self-conditioning collapse attractor (see diagnostic).")
     p.add_argument("--parameterization", default="v", choices=["eps", "v"])
     p.add_argument("--ema_decay", type=float, default=0.9999)
     p.add_argument("--self_cond", action=argparse.BooleanOptionalAction, default=True)
@@ -233,7 +237,7 @@ def plot_training_curve(losses, path):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def generate_batched(diffusion, model, n_total, batch_size, device, ddim_steps):
+def generate_batched(diffusion, model, n_total, batch_size, device, ddim_steps, eta=0.0):
     """Generate n_total audio clips in chunks of batch_size. Returns CPU tensor."""
     chunks, done = [], 0
     while done < n_total:
@@ -241,7 +245,7 @@ def generate_batched(diffusion, model, n_total, batch_size, device, ddim_steps):
         shape = (b, 1, TARGET_LEN)
         if ddim_steps > 0:
             x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
-                                       eta=0.0, progress=False)
+                                       eta=eta, progress=False)
         else:
             x = diffusion.sample(model, shape, device, progress=False)
         chunks.append(x.cpu()); done += b
@@ -425,7 +429,7 @@ def main():
                 if args.ddim_steps > 0:
                     listen_samples = diffusion.ddim_sample(
                         ema.ema_model, shape, device,
-                        num_steps=args.ddim_steps, eta=0.0, progress=False,
+                        num_steps=args.ddim_steps, eta=args.eta, progress=False,
                     )
                 else:
                     listen_samples = diffusion.sample(ema.ema_model, shape, device, progress=False)
@@ -441,7 +445,7 @@ def main():
                         diffusion, ema.ema_model,
                         n_total=args.n_metric_samples,
                         batch_size=max(8, args.batch_size),
-                        device=device, ddim_steps=args.ddim_steps,
+                        device=device, ddim_steps=args.ddim_steps, eta=args.eta,
                     )
                 feats_gen = extract_features(classifier, metric_samples.clamp(-1, 1),
                                               batch_size=128, device=device)

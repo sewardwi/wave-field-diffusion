@@ -23,6 +23,8 @@
 #   AUTOPUSH=1 SHUTDOWN=1 FAST=1 bash scripts/run_sc09_ablation.sh   # overnight: push + self-terminate pod
 #   EPOCHS=150 bash scripts/run_sc09_ablation.sh               # override epoch count
 #   SMOKE=1 bash scripts/run_sc09_ablation.sh                  # 3-epoch smoke test only
+#   DIAG=1 bash scripts/run_sc09_ablation.sh                   # mode-collapse diagnostic (~1h)
+#   DIAG=1 AUTOPUSH=1 SHUTDOWN=1 bash scripts/run_sc09_ablation.sh   # diagnostic, unattended
 #   N_EVAL_SAMPLES=5000 bash scripts/run_sc09_ablation.sh      # cheaper final FSD
 #   SKIP_EVAL=1 bash scripts/run_sc09_ablation.sh              # train only, no 10k eval
 #
@@ -53,6 +55,9 @@ EPOCHS="${EPOCHS:-100}"
 FAST="${FAST:-0}"
 AUTOPUSH="${AUTOPUSH:-0}"     # git-commit+push small result files after each config
 SHUTDOWN="${SHUTDOWN:-0}"     # terminate the pod when the run ends (stops billing)
+DIAG="${DIAG:-0}"            # run the mode-collapse diagnostic instead of the ablation
+DIAG_EPOCHS="${DIAG_EPOCHS:-40}"   # short training per diagnostic cell
+DIAG_EVAL="${DIAG_EVAL:-2000}"     # samples per diagnostic eval (cheaper than 10k)
 
 # -----------------------------------------------------------------------------
 # Auto-push results off the pod (so an overnight run is safe without rsync).
@@ -70,7 +75,7 @@ autopush_results() {
     # still too big for git and stay on the pod.
     git add -f "${dir}/metrics.json" "${dir}/metric_history.json" \
                "${dir}/config.json" "${dir}/training.log" "${dir}"/*.png \
-               outputs/run_master.log 2>/dev/null || true
+               "${dir}"/metrics_eta*.json outputs/run_master.log 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
         echo "  (nothing new to commit)"
         return 0
@@ -155,8 +160,11 @@ shutdown_trap() {
     if [ "$AUTOPUSH" = "1" ]; then
         echo "Final safety push of all results + full logs before terminating…"
         git add -f outputs/sc09_*/metrics.json outputs/sc09_*/metric_history.json \
-                   outputs/sc09_*/config.json outputs/sc09_*/training.log \
-                   outputs/sc09_*/*.png outputs/run_master.log 2>/dev/null || true
+                   outputs/sc09_*/config.json outputs/sc09_*/training.log outputs/sc09_*/*.png \
+                   outputs/diag_*/metrics.json outputs/diag_*/metrics_eta*.json \
+                   outputs/diag_*/metric_history.json outputs/diag_*/config.json \
+                   outputs/diag_*/training.log outputs/diag_*/*.png \
+                   outputs/run_master.log 2>/dev/null || true
         git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
             commit -m "SC09 results: final [auto]" >/dev/null 2>&1 || true
         if ! git push 2>&1 | tail -2; then
@@ -183,6 +191,69 @@ if [ "$SHUTDOWN" = "1" ]; then
         trap shutdown_trap EXIT
         echo "Self-terminate armed: pod ${RUNPOD_POD_ID} will be terminated via RunPod API when this script exits."
     fi
+fi
+
+# -----------------------------------------------------------------------------
+# Collapse diagnostic (DIAG=1): isolate the cause of SC09 mode collapse cheaply
+# (~1h) before any full retrain. Runs a 2x2 on wave+physics (the hardest
+# collapser): self_cond {on,off} x eval eta {0,1}, reporting class entropy
+# (diversity) per cell. Hypothesis: self-conditioning + deterministic (eta=0)
+# DDIM forms a collapse attractor — so self_cond=off and/or eta=1 should lift
+# entropy. Reuses AUTOPUSH + the shutdown trap; safe to run unattended.
+# -----------------------------------------------------------------------------
+if [ "$DIAG" = "1" ]; then
+    echo
+    echo "=== COLLAPSE DIAGNOSTIC: wave+physics  self_cond{on,off} x eta{0,1} ==="
+    echo "    DIAG_EPOCHS=${DIAG_EPOCHS}  eval_samples=${DIAG_EVAL}"
+
+    for sc in on off; do
+        [ "$sc" = "on" ] && sc_flag="--self_cond" || sc_flag="--no-self_cond"
+        dir="outputs/diag_wave_physics_sc${sc}"
+        if [ -f "${dir}/metrics_eta1.json" ]; then
+            echo; echo "=== Skip ${dir} (already evaluated — delete to re-run) ==="
+            continue
+        fi
+        echo
+        echo "=== Train wave+physics self_cond=${sc} (${DIAG_EPOCHS} ep) -> ${dir} ==="
+        mkdir -p "$dir"
+        if ! python train_audio.py --attn wave --conditioning physics ${sc_flag} \
+                --epochs "${DIAG_EPOCHS}" --batch_size 64 \
+                --sample_every "${DIAG_EPOCHS}" --n_metric_samples 500 \
+                --n_real_features 1000 --save_dir "${dir}" 2>&1 | tee "${dir}/training.log"; then
+            echo "!!! Diagnostic training FAILED for self_cond=${sc} — continuing."
+            autopush_results "$dir"; continue
+        fi
+        # A/B the same checkpoint at deterministic (eta=0) and stochastic (eta=1)
+        for eta in 0 1; do
+            echo; echo "=== Eval ${dir} at eta=${eta} (${DIAG_EVAL} samples) ==="
+            if python -m metrics.evaluate "${dir}" --n_samples "${DIAG_EVAL}" --eta "${eta}"; then
+                cp "${dir}/metrics.json" "${dir}/metrics_eta${eta}.json"
+            else
+                echo "!!! Eval FAILED for ${dir} eta=${eta} — continuing."
+            fi
+        done
+        autopush_results "$dir"
+    done
+
+    echo
+    echo "=== COLLAPSE DIAGNOSTIC SUMMARY ==="
+    echo "    class entropy (uniform=2.303; higher = more diverse = less collapse)"
+    printf "  %-22s  %8s  %8s\n" "config" "eta=0" "eta=1"
+    printf "  %-22s  %8s  %8s\n" "---------------------" "--------" "--------"
+    for sc in on off; do
+        dir="outputs/diag_wave_physics_sc${sc}"
+        python - "$dir" "$sc" <<'PY'
+import json, sys
+d, sc = sys.argv[1], sys.argv[2]
+def ent(p):
+    try:    return f"{json.load(open(p))['class_entropy']:.3f}"
+    except Exception: return "    -"
+print(f"  {'self_cond=' + sc:<22}  {ent(d + '/metrics_eta0.json'):>8}  {ent(d + '/metrics_eta1.json'):>8}")
+PY
+    done
+    echo
+    echo "Read: whichever knob (self_cond=off or eta=1) lifts entropy is the collapse driver."
+    exit 0   # triggers the EXIT trap: final push of all logs/results + pod self-terminate
 fi
 
 # -----------------------------------------------------------------------------

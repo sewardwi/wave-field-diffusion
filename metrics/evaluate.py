@@ -150,6 +150,7 @@ def generate_samples(
     batch_size: int,
     device: torch.device,
     ddim_steps: int,
+    eta: float = 0.0,
 ) -> torch.Tensor:
     """Generate n_total samples in batches of batch_size. Returns CPU tensor."""
     # bf16 autocast on CUDA tensor cores ~halves sampling wall-clock; no-op
@@ -164,7 +165,7 @@ def generate_samples(
             b = min(batch_size, n_total - n_done)
             shape = (b,) + tuple(sample_shape)
             x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
-                                       eta=0.0, progress=False)
+                                       eta=eta, progress=False)
             chunks.append(x.detach().cpu())
             n_done += b
             pbar.update(b)
@@ -353,6 +354,10 @@ def main():
                    help="Number of real samples used for Frechet baseline (MNIST/SC09).")
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--ddim_steps", type=int, default=50)
+    p.add_argument("--eta", type=float, default=0.0,
+                   help="DDIM stochasticity. 0=deterministic, 1=full DDPM variance. "
+                        ">0 injects noise per step — use to A/B whether a "
+                        "self-conditioning collapse is a sampling attractor.")
     p.add_argument("--fid_device", default=None,
                    help="Device for clean-fid Inception ('cpu' on Mac, 'cuda' otherwise). "
                         "Default: auto.")
@@ -428,7 +433,7 @@ def main():
         samples = generate_samples(
             model, diffusion, sample_shape,
             n_total=args.n_samples, batch_size=args.batch_size,
-            device=device, ddim_steps=args.ddim_steps,
+            device=device, ddim_steps=args.ddim_steps, eta=args.eta,
         )
         print(f"Samples: {tuple(samples.shape)}  range=[{samples.min():.3f}, {samples.max():.3f}]")
 
@@ -453,6 +458,7 @@ def main():
         "checkpoint": str(ckpt_path.name),
         "n_samples": int(args.n_samples),
         "ddim_steps": int(args.ddim_steps),
+        "eta": float(args.eta),
     })
 
     out_path = ckpt_dir / "metrics.json"
