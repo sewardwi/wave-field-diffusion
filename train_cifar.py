@@ -77,13 +77,15 @@ class StandardAttention(nn.Module):
 
 
 def make_standard_model(image_size, in_channels, patch_size, dim, depth,
-                         num_heads, timestep_dim, conditioning, use_self_cond=False):
+                         num_heads, timestep_dim, conditioning, use_self_cond=False,
+                         num_classes=None, class_dropout_prob=0.1):
     """WaveFieldDenoiser with attention swapped out for standard softmax attention."""
     model = WaveFieldDenoiser(
         image_size=image_size, in_channels=in_channels, patch_size=patch_size,
         dim=dim, depth=depth, num_heads=num_heads, timestep_dim=timestep_dim,
         conditioning=conditioning, use_2d_kernel=False,
         use_self_cond=use_self_cond,
+        num_classes=num_classes, class_dropout_prob=class_dropout_prob,
     )
     for block in model.blocks:
         block.attn = StandardAttention(dim=dim, num_heads=num_heads)
@@ -99,6 +101,15 @@ def get_args():
     p.add_argument("--conditioning", default="physics", choices=["physics", "adaln"])
     p.add_argument("--kernel", default="2d", choices=["1d", "2d"],
                    help="1D sequence kernels (Approach A) or 2D spatial kernels (Approach B)")
+    p.add_argument("--dynamic_filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="Data-dependent spectral filter on the wave kernel "
+                        "(ΔK̂(x) added to the static kernel spectrum). Wave attn only.")
+    p.add_argument("--gating", default="pointwise", choices=["pointwise", "hyena"],
+                   help="Wave-attn gate: 'pointwise' (sigmoid q⊙k) or 'hyena' "
+                        "(q ⊙ conv(k ⊙ v), position-dependent routing). Wave attn only.")
+    p.add_argument("--aniso_kernel", action=argparse.BooleanOptionalAction, default=False,
+                   help="Anisotropic oriented (Gabor-like) 2D kernel instead of "
+                        "isotropic radial — adds orientation selectivity. 2D wave only.")
     p.add_argument("--attn", default="wave", choices=["wave", "standard"],
                    help="Attention type — wave field or standard softmax (baseline)")
     p.add_argument("--epochs", type=int, default=200)
@@ -117,8 +128,31 @@ def get_args():
     p.add_argument("--parameterization", default="v", choices=["eps", "v"])
     p.add_argument("--ema_decay", type=float, default=0.9999)
     p.add_argument("--self_cond", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--num_classes", type=int, default=None,
+                   help="Enable class-conditional generation + CFG with this many "
+                        "classes (CIFAR-10 → 10). Omit for unconditional.")
+    p.add_argument("--class_dropout", type=float, default=0.1,
+                   help="Label-dropout prob for classifier-free-guidance training.")
+    p.add_argument("--guidance_scale", type=float, default=1.0,
+                   help="CFG scale used for eval-grid sampling (1.0 = no guidance).")
+    p.add_argument("--sampler", default="ddim", choices=["ddim", "dpmpp", "ddpm"],
+                   help="Sampler for periodic eval grids (dpmpp = DPM-Solver++(2M)).")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
+
+
+def do_sample(diffusion, model, shape, device, args, y=None):
+    """Dispatch the chosen sampler with optional class labels + CFG."""
+    gs = args.guidance_scale
+    if args.sampler == "dpmpp":
+        return diffusion.dpmpp_2m_sample(model, shape, device,
+                                         num_steps=max(args.ddim_steps, 1),
+                                         progress=False, y=y, guidance_scale=gs)
+    if args.sampler == "ddpm" or args.ddim_steps == 0:
+        return diffusion.sample(model, shape, device, progress=False,
+                                y=y, guidance_scale=gs)
+    return diffusion.ddim_sample(model, shape, device, num_steps=args.ddim_steps,
+                                 eta=0.0, progress=False, y=y, guidance_scale=gs)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +190,8 @@ def plot_kernel_params(model, diffusion, path, num_ts_samples: int = 20):
         attn = block.attn
         if not hasattr(attn, "use_ts_cond") or not attn.use_ts_cond:
             return  # not physics-conditioned wave attention → skip
+        if getattr(attn, "aniso_kernel", False):
+            return  # anisotropic kernel has 5 directional params/head → different viz
         with torch.no_grad():
             params = attn.ts_to_params(t_embs)
             B_, H = num_ts_samples, attn.num_heads
@@ -242,8 +278,16 @@ def main():
         run_name = f"cifar_{args.attn}_{args.conditioning}"
         if args.attn == "wave":
             run_name += f"_{args.kernel}"
+            if args.dynamic_filter:
+                run_name += "_dyn"
+            if args.gating == "hyena":
+                run_name += "_hyena"
+            if args.aniso_kernel:
+                run_name += "_aniso"
         if args.self_cond:
             run_name += "_sc"
+        if args.num_classes is not None:
+            run_name += "_cond"
         args.save_dir = os.path.join("outputs", run_name)
     os.makedirs(args.save_dir, exist_ok=True)
 
@@ -285,6 +329,7 @@ def main():
             dim=args.dim, depth=args.depth, num_heads=args.num_heads,
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
             use_self_cond=args.self_cond,
+            num_classes=args.num_classes, class_dropout_prob=args.class_dropout,
         ).to(device)
     else:
         model = WaveFieldDenoiser(
@@ -292,6 +337,9 @@ def main():
             dim=args.dim, depth=args.depth, num_heads=args.num_heads,
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
             use_2d_kernel=use_2d, use_self_cond=args.self_cond,
+            dynamic_filter=args.dynamic_filter, gating=args.gating,
+            aniso_kernel=args.aniso_kernel,
+            num_classes=args.num_classes, class_dropout_prob=args.class_dropout,
         ).to(device)
 
     print(f"Parameters: {model.param_count():,}")
@@ -334,10 +382,11 @@ def main():
         epoch_loss = 0.0
 
         pbar = tqdm(loader, desc=f"Epoch {epoch:3d}/{args.epochs}", leave=False)
-        for x, _ in pbar:
+        for x, y in pbar:
             x = x.to(device)
+            y = y.to(device) if args.num_classes is not None else None
             t = torch.randint(0, args.num_timesteps, (x.shape[0],), device=device)
-            loss = diffusion.p_losses(model, x, t)
+            loss = diffusion.p_losses(model, x, t, y=y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -360,13 +409,10 @@ def main():
             ema.ema_model.eval()
             with torch.no_grad():
                 shape = (64, 3, 32, 32)
-                if args.ddim_steps > 0:
-                    samples = diffusion.ddim_sample(
-                        ema.ema_model, shape, device,
-                        num_steps=args.ddim_steps, eta=0.0, progress=False,
-                    )
-                else:
-                    samples = diffusion.sample(ema.ema_model, shape, device, progress=False)
+                # Conditional: a per-class grid (each row a class); CFG via guidance_scale
+                y_s = (torch.arange(64, device=device) % args.num_classes
+                       if args.num_classes is not None else None)
+                samples = do_sample(diffusion, ema.ema_model, shape, device, args, y_s)
 
             sample_title = (f"epoch {epoch} | attn={args.attn} cond={args.conditioning} "
                             f"{'sc' if args.self_cond else ''} | loss {avg:.4f}")

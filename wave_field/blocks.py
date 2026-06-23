@@ -80,6 +80,37 @@ def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch
     return x * (1.0 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
+class LabelEmbedder(nn.Module):
+    """
+    Embeds class labels into a vector, with label dropout for classifier-free
+    guidance (Ho & Salimans 2022; DiT, Peebles & Xie 2023).
+
+    An extra embedding row at index `num_classes` is the learned "null" / un-
+    conditional token. During training, labels are randomly replaced by null
+    with probability `dropout_prob` so the same network learns both the
+    conditional and unconditional scores needed for guidance at sampling time.
+    """
+
+    def __init__(self, num_classes: int, dim: int, dropout_prob: float = 0.1):
+        super().__init__()
+        self.num_classes = num_classes
+        self.dropout_prob = dropout_prob
+        self.embedding_table = nn.Embedding(num_classes + 1, dim)
+
+    def token_drop(self, labels: torch.Tensor, force_drop_ids: torch.Tensor | None = None):
+        if force_drop_ids is None:
+            drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
+        else:
+            drop_ids = force_drop_ids.bool()
+        return torch.where(drop_ids, self.num_classes, labels)
+
+    def forward(self, labels: torch.Tensor, train: bool,
+                force_drop_ids: torch.Tensor | None = None) -> torch.Tensor:
+        if (train and self.dropout_prob > 0) or force_drop_ids is not None:
+            labels = self.token_drop(labels, force_drop_ids)
+        return self.embedding_table(labels)
+
+
 # ---------------------------------------------------------------------------
 # Wave Field Block
 # ---------------------------------------------------------------------------
@@ -108,6 +139,9 @@ class WaveFieldBlock(nn.Module):
         use_2d_kernel: bool = False,
         height: int | None = None,
         width: int | None = None,
+        dynamic_filter: bool = False,
+        gating: str = "pointwise",
+        aniso_kernel: bool = False,
     ):
         super().__init__()
         self.conditioning = conditioning
@@ -125,11 +159,14 @@ class WaveFieldBlock(nn.Module):
                 dim=dim, num_heads=num_heads,
                 height=height, width=width,
                 timestep_dim=wfa_ts_dim, conditioning=conditioning,
+                dynamic_filter=dynamic_filter, gating=gating,
+                aniso_kernel=aniso_kernel,
             )
         else:
             self.attn = WaveFieldAttention(
                 dim=dim, num_heads=num_heads, seq_len=seq_len,
                 timestep_dim=wfa_ts_dim, conditioning=conditioning,
+                dynamic_filter=dynamic_filter, gating=gating,
             )
 
         # Feed-forward

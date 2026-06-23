@@ -62,17 +62,34 @@ class StandardAttention(nn.Module):
 
 
 def make_standard_model(image_size, in_channels, patch_size, dim, depth,
-                         num_heads, timestep_dim, conditioning, use_self_cond=False):
+                         num_heads, timestep_dim, conditioning, use_self_cond=False,
+                         num_classes=None, class_dropout_prob=0.1):
     """WaveFieldDenoiser with attention swapped out for standard softmax attention."""
     model = WaveFieldDenoiser(
         image_size=image_size, in_channels=in_channels, patch_size=patch_size,
         dim=dim, depth=depth, num_heads=num_heads, timestep_dim=timestep_dim,
         conditioning=conditioning, use_2d_kernel=False,
         use_self_cond=use_self_cond,
+        num_classes=num_classes, class_dropout_prob=class_dropout_prob,
     )
     for block in model.blocks:
         block.attn = StandardAttention(dim=dim, num_heads=num_heads)
     return model
+
+
+def do_sample(diffusion, model, shape, device, args, y=None):
+    """Dispatch the chosen sampler with optional class labels + CFG."""
+    gs = getattr(args, "guidance_scale", 1.0)
+    sampler = getattr(args, "sampler", "ddim")
+    if sampler == "dpmpp":
+        return diffusion.dpmpp_2m_sample(model, shape, device,
+                                         num_steps=max(args.ddim_steps, 1),
+                                         progress=False, y=y, guidance_scale=gs)
+    if sampler == "ddpm" or args.ddim_steps == 0:
+        return diffusion.sample(model, shape, device, progress=False,
+                                y=y, guidance_scale=gs)
+    return diffusion.ddim_sample(model, shape, device, num_steps=args.ddim_steps,
+                                 eta=0.0, progress=False, y=y, guidance_scale=gs)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +112,12 @@ def get_args():
                    help="wave field attention or standard softmax (baseline)")
     p.add_argument("--kernel", default="2d", choices=["1d", "2d"],
                    help="1D sequence kernels or 2D spatial kernels (default: 2d)")
+    p.add_argument("--dynamic_filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="Data-dependent spectral filter on the wave kernel. Wave attn only.")
+    p.add_argument("--gating", default="pointwise", choices=["pointwise", "hyena"],
+                   help="Wave-attn gate: 'pointwise' or 'hyena' (data-dependent routing).")
+    p.add_argument("--aniso_kernel", action=argparse.BooleanOptionalAction, default=False,
+                   help="Anisotropic oriented 2D kernel (orientation selectivity). 2D wave only.")
     p.add_argument("--patch_size", type=int, default=4,
                    help="Patch size — 28 must be divisible (4→49 tokens, 7→16 tokens)")
     p.add_argument("--save_dir", default="outputs/mnist",
@@ -110,6 +133,15 @@ def get_args():
     p.add_argument("--self_cond", action=argparse.BooleanOptionalAction, default=True,
                    help="Self-conditioning (Chen 2022) — adds an extra input channel "
                         "with the previous step's x_0 estimate; usually improves quality")
+    p.add_argument("--num_classes", type=int, default=None,
+                   help="Enable class-conditional generation + CFG (MNIST → 10). "
+                        "Omit for unconditional.")
+    p.add_argument("--class_dropout", type=float, default=0.1,
+                   help="Label-dropout prob for classifier-free-guidance training.")
+    p.add_argument("--guidance_scale", type=float, default=1.0,
+                   help="CFG scale for eval-grid sampling (1.0 = no guidance).")
+    p.add_argument("--sampler", default="ddim", choices=["ddim", "dpmpp", "ddpm"],
+                   help="Sampler for periodic eval grids (dpmpp = DPM-Solver++(2M)).")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -238,6 +270,7 @@ def main():
             dim=args.dim, depth=args.depth, num_heads=args.num_heads,
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
             use_self_cond=args.self_cond,
+            num_classes=args.num_classes, class_dropout_prob=args.class_dropout,
         ).to(device)
     else:
         model = WaveFieldDenoiser(
@@ -246,6 +279,9 @@ def main():
             timestep_dim=args.timestep_dim, conditioning=args.conditioning,
             use_2d_kernel=use_2d,
             use_self_cond=args.self_cond,
+            dynamic_filter=args.dynamic_filter, gating=args.gating,
+            aniso_kernel=args.aniso_kernel,
+            num_classes=args.num_classes, class_dropout_prob=args.class_dropout,
         ).to(device)
 
     print(f"Parameters: {model.param_count():,}")
@@ -285,14 +321,15 @@ def main():
         epoch_loss = 0.0
 
         pbar = tqdm(loader, desc=f"Epoch {epoch:3d}/{args.epochs}", leave=False)
-        for x, _ in pbar:
+        for x, y in pbar:
             x = x.to(device)
+            y = y.to(device) if args.num_classes is not None else None
             B = x.shape[0]
 
             # Uniform timestep sample
             t = torch.randint(0, args.num_timesteps, (B,), device=device)
 
-            loss = diffusion.p_losses(model, x, t)
+            loss = diffusion.p_losses(model, x, t, y=y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -315,15 +352,9 @@ def main():
             ema.ema_model.eval()
             with torch.no_grad():
                 sample_shape = (64, 1, 28, 28)
-                if args.ddim_steps > 0:
-                    samples = diffusion.ddim_sample(
-                        ema.ema_model, sample_shape, device,
-                        num_steps=args.ddim_steps, eta=0.0, progress=False
-                    )
-                else:
-                    samples = diffusion.sample(
-                        ema.ema_model, sample_shape, device, progress=False
-                    )
+                y_s = (torch.arange(64, device=device) % args.num_classes
+                       if args.num_classes is not None else None)
+                samples = do_sample(diffusion, ema.ema_model, sample_shape, device, args, y_s)
 
             save_sample_grid(
                 samples,

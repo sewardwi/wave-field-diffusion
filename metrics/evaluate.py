@@ -93,6 +93,7 @@ def detect_modality(ckpt_dir: Path, override: str | None) -> str:
 
 
 def build_image_model(cfg: dict, image_size: int, in_channels: int):
+    is_wave = cfg.get("attn", "wave") == "wave"
     model = WaveFieldDenoiser(
         image_size=image_size,
         in_channels=in_channels,
@@ -102,10 +103,17 @@ def build_image_model(cfg: dict, image_size: int, in_channels: int):
         num_heads=cfg["num_heads"],
         timestep_dim=cfg["timestep_dim"],
         conditioning=cfg["conditioning"],
-        use_2d_kernel=(cfg.get("kernel") == "2d" and cfg.get("attn", "wave") == "wave"),
+        use_2d_kernel=(cfg.get("kernel") == "2d" and is_wave),
         use_self_cond=cfg.get("self_cond", False),
+        # New wave-operator flags must match the trained architecture or the EMA
+        # weights won't load (silently → garbage eval). Read straight from config.
+        dynamic_filter=cfg.get("dynamic_filter", False) and is_wave,
+        gating=cfg.get("gating", "pointwise") if is_wave else "pointwise",
+        aniso_kernel=cfg.get("aniso_kernel", False) and is_wave,
+        num_classes=cfg.get("num_classes", None),
+        class_dropout_prob=cfg.get("class_dropout", 0.1),
     )
-    if cfg.get("attn", "wave") == "standard":
+    if not is_wave:
         for block in model.blocks:
             block.attn = StandardAttention(dim=cfg["dim"], num_heads=cfg["num_heads"])
     return model
@@ -113,6 +121,7 @@ def build_image_model(cfg: dict, image_size: int, in_channels: int):
 
 def build_audio_model(cfg: dict):
     from datasets.sc09 import TARGET_LEN
+    is_wave = cfg.get("attn", "wave") == "wave"
     model = WaveFieldAudioDenoiser(
         sequence_length=TARGET_LEN,
         in_channels=1,
@@ -123,8 +132,12 @@ def build_audio_model(cfg: dict):
         timestep_dim=cfg["timestep_dim"],
         conditioning=cfg["conditioning"],
         use_self_cond=cfg.get("self_cond", False),
+        dynamic_filter=cfg.get("dynamic_filter", False) and is_wave,
+        gating=cfg.get("gating", "pointwise") if is_wave else "pointwise",
+        num_classes=cfg.get("num_classes", None),
+        class_dropout_prob=cfg.get("class_dropout", 0.1),
     )
-    if cfg.get("attn", "wave") == "standard":
+    if not is_wave:
         for block in model.blocks:
             block.attn = StandardAttention(dim=cfg["dim"], num_heads=cfg["num_heads"])
     return model
@@ -151,8 +164,15 @@ def generate_samples(
     device: torch.device,
     ddim_steps: int,
     eta: float = 0.0,
+    num_classes: int | None = None,
+    guidance_scale: float = 1.0,
+    sampler: str = "ddim",
 ) -> torch.Tensor:
-    """Generate n_total samples in batches of batch_size. Returns CPU tensor."""
+    """
+    Generate n_total samples in batches of batch_size. Returns CPU tensor.
+    For conditional models, draws uniform random class labels per batch (matching
+    the ~uniform class prior of CIFAR/MNIST/SC09) and applies CFG.
+    """
     # bf16 autocast on CUDA tensor cores ~halves sampling wall-clock; no-op
     # elsewhere. FFT ops stay fp32 under autocast, so the wave path is safe.
     amp_ctx = (torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -164,8 +184,15 @@ def generate_samples(
         while n_done < n_total:
             b = min(batch_size, n_total - n_done)
             shape = (b,) + tuple(sample_shape)
-            x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
-                                       eta=eta, progress=False)
+            y = (torch.randint(0, num_classes, (b,), device=device)
+                 if num_classes is not None else None)
+            if sampler == "dpmpp":
+                x = diffusion.dpmpp_2m_sample(model, shape, device, num_steps=ddim_steps,
+                                              progress=False, y=y, guidance_scale=guidance_scale)
+            else:
+                x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
+                                          eta=eta, progress=False, y=y,
+                                          guidance_scale=guidance_scale)
             chunks.append(x.detach().cpu())
             n_done += b
             pbar.update(b)
@@ -354,6 +381,11 @@ def main():
                    help="Number of real samples used for Frechet baseline (MNIST/SC09).")
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--ddim_steps", type=int, default=50)
+    p.add_argument("--guidance_scale", type=float, default=None,
+                   help="CFG scale for conditional checkpoints. Default: read from "
+                        "config.json if trained conditional, else 1.0 (no guidance).")
+    p.add_argument("--sampler", default=None, choices=["ddim", "dpmpp"],
+                   help="Override sampler. Default: read from config.json (else ddim).")
     p.add_argument("--eta", type=float, default=0.0,
                    help="DDIM stochasticity. 0=deterministic, 1=full DDPM variance. "
                         ">0 injects noise per step — use to A/B whether a "
@@ -430,10 +462,20 @@ def main():
         print("Skipping sample generation (--reuse_samples).")
         samples = None
     else:
+        # Conditional eval: sample with uniform random labels + CFG so FID is
+        # meaningful. num_classes/guidance/sampler default to what was trained.
+        num_classes = cfg.get("num_classes", None)
+        guidance_scale = (args.guidance_scale if args.guidance_scale is not None
+                          else (1.0 if num_classes is None else 1.5))
+        sampler = args.sampler or cfg.get("sampler", "ddim")
+        if num_classes is not None:
+            print(f"Conditional eval: {num_classes} classes, "
+                  f"guidance_scale={guidance_scale}, sampler={sampler}")
         samples = generate_samples(
             model, diffusion, sample_shape,
             n_total=args.n_samples, batch_size=args.batch_size,
             device=device, ddim_steps=args.ddim_steps, eta=args.eta,
+            num_classes=num_classes, guidance_scale=guidance_scale, sampler=sampler,
         )
         print(f"Samples: {tuple(samples.shape)}  range=[{samples.min():.3f}, {samples.max():.3f}]")
 

@@ -26,6 +26,7 @@ import torch.nn as nn
 
 from wave_field.blocks import (
     TimestepEmbedder,
+    LabelEmbedder,
     WaveFieldBlock,
     FinalLayer,
     pos_embed_2d_sincos,
@@ -57,6 +58,11 @@ class WaveFieldDenoiser(nn.Module):
         conditioning: str = "physics",
         use_2d_kernel: bool = False,
         use_self_cond: bool = False,
+        dynamic_filter: bool = False,
+        gating: str = "pointwise",
+        aniso_kernel: bool = False,
+        num_classes: int | None = None,
+        class_dropout_prob: float = 0.1,
     ):
         super().__init__()
 
@@ -73,6 +79,7 @@ class WaveFieldDenoiser(nn.Module):
         self.dim = dim
         self.conditioning = conditioning
         self.use_self_cond = use_self_cond
+        self.num_classes = num_classes
 
         self.ph = H // patch_size
         self.pw = W // patch_size
@@ -88,6 +95,10 @@ class WaveFieldDenoiser(nn.Module):
         )
 
         self.time_embed = TimestepEmbedder(timestep_dim)
+        # Optional class conditioning (DiT-style): label embedding is added to the
+        # timestep embedding so it flows through the same physics/AdaLN pathways.
+        if num_classes is not None:
+            self.label_embed = LabelEmbedder(num_classes, timestep_dim, class_dropout_prob)
 
         self.blocks = nn.ModuleList([
             WaveFieldBlock(
@@ -95,6 +106,8 @@ class WaveFieldDenoiser(nn.Module):
                 timestep_dim=timestep_dim, conditioning=conditioning,
                 use_2d_kernel=use_2d_kernel,
                 height=self.ph, width=self.pw,
+                dynamic_filter=dynamic_filter, gating=gating,
+                aniso_kernel=aniso_kernel,
             )
             for _ in range(depth)
         ])
@@ -131,12 +144,16 @@ class WaveFieldDenoiser(nn.Module):
         return x
 
     def forward(self, x_noisy: torch.Tensor, t: torch.Tensor,
-                self_cond: torch.Tensor | None = None) -> torch.Tensor:
+                self_cond: torch.Tensor | None = None,
+                y: torch.Tensor | None = None,
+                force_drop_ids: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             x_noisy:   (B, C, H, W) noisy image in [-1, 1]
             t:         (B,) integer timesteps
             self_cond: (B, C, H, W) optional previous-step x_0 estimate
+            y:         (B,) integer class labels (if num_classes set)
+            force_drop_ids: (B,) bool — force labels to null (for CFG uncond pass)
         Returns:
             (B, C, H, W) — predicted noise ε (or v with v-pred)
         """
@@ -150,6 +167,8 @@ class WaveFieldDenoiser(nn.Module):
 
         h = self.patch_embed(patches) + self.pos_embed
         t_emb = self.time_embed(t)
+        if self.num_classes is not None and y is not None:
+            t_emb = t_emb + self.label_embed(y, self.training, force_drop_ids)
         for block in self.blocks:
             h = block(h, t_emb)
         out = self.final(h, t_emb)

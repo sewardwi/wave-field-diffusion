@@ -83,6 +83,8 @@ def make_audio_model(args, *, use_standard_attn: bool):
         timestep_dim=args.timestep_dim,
         conditioning=args.conditioning,
         use_self_cond=args.self_cond,
+        dynamic_filter=args.dynamic_filter, gating=args.gating,
+        num_classes=args.num_classes, class_dropout_prob=args.class_dropout,
     )
     if use_standard_attn:
         for block in model.blocks:
@@ -97,7 +99,20 @@ def make_audio_model(args, *, use_standard_attn: bool):
 def get_args():
     p = argparse.ArgumentParser(description="Train wave field audio diffusion on SC09")
     p.add_argument("--attn", default="wave", choices=["wave", "standard"])
+    p.add_argument("--dynamic_filter", action=argparse.BooleanOptionalAction, default=False,
+                   help="Data-dependent spectral filter on the wave kernel. Wave attn only.")
+    p.add_argument("--gating", default="pointwise", choices=["pointwise", "hyena"],
+                   help="Wave-attn gate: 'pointwise' (sigmoid q⊙k) or 'hyena' "
+                        "(q ⊙ conv(k ⊙ v), position-dependent routing). Wave attn only.")
     p.add_argument("--conditioning", default="physics", choices=["physics", "adaln"])
+    p.add_argument("--num_classes", type=int, default=None,
+                   help="Enable class-conditional generation + CFG (SC09 digits → 10). "
+                        "Directly targets the wave+physics mode-collapse via the "
+                        "CFG diversity/quality knob. Omit for unconditional.")
+    p.add_argument("--class_dropout", type=float, default=0.1,
+                   help="Label-dropout prob for classifier-free-guidance training.")
+    p.add_argument("--guidance_scale", type=float, default=1.0,
+                   help="CFG scale for sampling (1.0 = no guidance).")
     p.add_argument("--epochs", type=int, default=200)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -237,17 +252,26 @@ def plot_training_curve(losses, path):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def generate_batched(diffusion, model, n_total, batch_size, device, ddim_steps, eta=0.0):
-    """Generate n_total audio clips in chunks of batch_size. Returns CPU tensor."""
+def generate_batched(diffusion, model, n_total, batch_size, device, ddim_steps, eta=0.0,
+                     num_classes=None, guidance_scale=1.0):
+    """
+    Generate n_total audio clips in chunks of batch_size. Returns CPU tensor.
+    If num_classes is set, draws uniform random digit labels per chunk (matching
+    SC09's ~uniform class prior) and applies classifier-free guidance.
+    """
     chunks, done = [], 0
     while done < n_total:
         b = min(batch_size, n_total - done)
         shape = (b, 1, TARGET_LEN)
+        y = (torch.randint(0, num_classes, (b,), device=device)
+             if num_classes is not None else None)
         if ddim_steps > 0:
             x = diffusion.ddim_sample(model, shape, device, num_steps=ddim_steps,
-                                       eta=eta, progress=False)
+                                       eta=eta, progress=False, y=y,
+                                       guidance_scale=guidance_scale)
         else:
-            x = diffusion.sample(model, shape, device, progress=False)
+            x = diffusion.sample(model, shape, device, progress=False, y=y,
+                                 guidance_scale=guidance_scale)
         chunks.append(x.cpu()); done += b
     return torch.cat(chunks, dim=0)
 
@@ -397,11 +421,12 @@ def main():
         epoch_loss = 0.0
 
         pbar = tqdm(loader, desc=f"Epoch {epoch:3d}/{args.epochs}", leave=False)
-        for x, _ in pbar:
+        for x, y in pbar:
             x = x.to(device)                                     # (B, 1, L)
+            y = y.to(device) if args.num_classes is not None else None
             t = torch.randint(0, args.num_timesteps, (x.shape[0],), device=device)
             with amp_ctx():
-                loss = diffusion.p_losses(model, x, t)
+                loss = diffusion.p_losses(model, x, t, y=y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -426,13 +451,18 @@ def main():
             # (a) small batch saved as listenable .wav grid (visual / audible debug)
             with torch.no_grad(), amp_ctx():
                 shape = (args.n_samples, 1, TARGET_LEN)
+                y_listen = (torch.arange(args.n_samples, device=device) % args.num_classes
+                            if args.num_classes is not None else None)
                 if args.ddim_steps > 0:
                     listen_samples = diffusion.ddim_sample(
                         ema.ema_model, shape, device,
                         num_steps=args.ddim_steps, eta=args.eta, progress=False,
+                        y=y_listen, guidance_scale=args.guidance_scale,
                     )
                 else:
-                    listen_samples = diffusion.sample(ema.ema_model, shape, device, progress=False)
+                    listen_samples = diffusion.sample(ema.ema_model, shape, device,
+                                                      progress=False, y=y_listen,
+                                                      guidance_scale=args.guidance_scale)
             sample_dir = os.path.join(args.save_dir, f"samples_epoch{epoch:04d}")
             save_audio_grid(listen_samples, sample_dir, prefix="gen")
 
@@ -446,6 +476,8 @@ def main():
                         n_total=args.n_metric_samples,
                         batch_size=max(8, args.batch_size),
                         device=device, ddim_steps=args.ddim_steps, eta=args.eta,
+                        num_classes=args.num_classes,
+                        guidance_scale=args.guidance_scale,
                     )
                 feats_gen = extract_features(classifier, metric_samples.clamp(-1, 1),
                                               batch_size=128, device=device)

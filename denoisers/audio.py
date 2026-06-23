@@ -22,6 +22,7 @@ import torch.nn as nn
 
 from wave_field.blocks import (
     TimestepEmbedder,
+    LabelEmbedder,
     WaveFieldBlock,
     FinalLayer,
     timestep_sinusoidal,
@@ -57,6 +58,10 @@ class WaveFieldAudioDenoiser(nn.Module):
         timestep_dim: int = 128,
         conditioning: str = "physics",
         use_self_cond: bool = False,
+        dynamic_filter: bool = False,
+        gating: str = "pointwise",
+        num_classes: int | None = None,
+        class_dropout_prob: float = 0.1,
     ):
         super().__init__()
         assert sequence_length % patch_size == 0, (
@@ -71,6 +76,7 @@ class WaveFieldAudioDenoiser(nn.Module):
         self.dim = dim
         self.conditioning = conditioning
         self.use_self_cond = use_self_cond
+        self.num_classes = num_classes
 
         # 1D patch embedding via strided Conv1d (doubled channels if self-cond)
         embed_in_ch = in_channels * (2 if use_self_cond else 1)
@@ -86,6 +92,8 @@ class WaveFieldAudioDenoiser(nn.Module):
         )
 
         self.time_embed = TimestepEmbedder(timestep_dim)
+        if num_classes is not None:
+            self.label_embed = LabelEmbedder(num_classes, timestep_dim, class_dropout_prob)
 
         # Audio is genuinely 1D — use 1D wave kernels
         self.blocks = nn.ModuleList([
@@ -93,6 +101,7 @@ class WaveFieldAudioDenoiser(nn.Module):
                 dim=dim, num_heads=num_heads, seq_len=self.num_patches,
                 timestep_dim=timestep_dim, conditioning=conditioning,
                 use_2d_kernel=False,
+                dynamic_filter=dynamic_filter, gating=gating,
             )
             for _ in range(depth)
         ])
@@ -114,12 +123,16 @@ class WaveFieldAudioDenoiser(nn.Module):
         return x.view(B, C, N * P)
 
     def forward(self, x_noisy: torch.Tensor, t: torch.Tensor,
-                self_cond: torch.Tensor | None = None) -> torch.Tensor:
+                self_cond: torch.Tensor | None = None,
+                y: torch.Tensor | None = None,
+                force_drop_ids: torch.Tensor | None = None) -> torch.Tensor:
         """
         Args:
             x_noisy:   (B, in_channels, sequence_length) noisy waveform in [-1, 1]
             t:         (B,) integer timesteps
             self_cond: (B, in_channels, sequence_length) optional x_0 estimate
+            y:         (B,) integer class labels (if num_classes set)
+            force_drop_ids: (B,) bool — force labels to null (CFG uncond pass)
         Returns:
             (B, in_channels, sequence_length) — predicted noise (or v if v-pred)
         """
@@ -135,6 +148,8 @@ class WaveFieldAudioDenoiser(nn.Module):
         h = h + self.pos_embed
 
         t_emb = self.time_embed(t)
+        if self.num_classes is not None and y is not None:
+            t_emb = t_emb + self.label_embed(y, self.training, force_drop_ids)
         for block in self.blocks:
             h = block(h, t_emb)
 
