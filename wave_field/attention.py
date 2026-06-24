@@ -223,7 +223,9 @@ class WaveFieldAttention(nn.Module):
         # (B, H, n_basis) · (n_basis, n_freq) → (B, H, n_freq)
         re = torch.einsum("bhn,nf->bhf", coeff[..., 0], self.freq_basis)
         im = torch.einsum("bhn,nf->bhf", coeff[..., 1], self.freq_basis)
-        return torch.complex(re, im)
+        # torch.complex rejects bf16; einsum under autocast yields bf16, so force
+        # fp32 (the spectral filter feeds the fp32 FFT path anyway).
+        return torch.complex(re.float(), im.float())
 
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor | None = None) -> torch.Tensor:
         """
@@ -411,7 +413,9 @@ class WaveFieldAttention2D(nn.Module):
         ).float()
         re = torch.einsum("bcn,nyw->bcyw", coeff[..., 0], self.freq_basis)
         im = torch.einsum("bcn,nyw->bcyw", coeff[..., 1], self.freq_basis)
-        return torch.complex(re, im)
+        # torch.complex rejects bf16; einsum under autocast yields bf16, so force
+        # fp32 (the spectral filter feeds the fp32 FFT path anyway).
+        return torch.complex(re.float(), im.float())
 
     def _build_kernel_2d(self, t_emb=None):
         """
