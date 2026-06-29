@@ -255,3 +255,19 @@ Found 256 images in the folder outputs/cifar_standard_adaln_sc_cond/fid_gen_tmp
 Wrote → outputs/cifar_standard_adaln_sc_cond/metrics.json
 
 === Auto-push results for outputs/cifar_standard_adaln_sc_cond ===
+To https://github.com/sewardwi/wave-field-diffusion.git
+   21c6dda..cc91a03  main -> main
+  pushed ✓
+
+=== Image ablation summary ===
+  run                                             metric
+  ----------------------------------------  ------------
+  cifar_standard_adaln_sc                        479.934
+  cifar_wave_physics_2d_sc                       479.428
+  cifar_wave_dyn_sc                              479.468
+  cifar_wave_dyn_hyena_sc                        479.366
+  cifar_wave_full_sc                             479.347
+  cifar_wave_full_sc_cond                        484.199
+  cifar_standard_adaln_sc_cond                   484.575
+
+Done. (Lower FID/FMD = better.) Conditional rows use CFG scale 1.5.
