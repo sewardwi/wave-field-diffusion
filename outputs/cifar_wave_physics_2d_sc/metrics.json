@@ -1,0 +1,11 @@
+{
+  "fid_clean_cifar10_train": 479.4280426790075,
+  "n_generated": 256,
+  "n_real": 10000,
+  "fid_device": "cuda",
+  "modality": "cifar",
+  "checkpoint": "checkpoint_epoch0002.pt",
+  "n_samples": 256,
+  "ddim_steps": 50,
+  "eta": 0.0
+}
