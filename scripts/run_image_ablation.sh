@@ -89,14 +89,21 @@ autopush_results() {
     [ "$AUTOPUSH" = "1" ] || return 0
     local dir="$1"
     echo; echo "=== Auto-push results for ${dir} ==="
-    git add -f "${dir}/config.json" "${dir}/metrics.json" \
-               "${dir}/metric_history.json" "${dir}/training.log" \
-               "${dir}"/*.png outputs/run_master.log 2>/dev/null || true
+    # Stage only small artifacts, by EXTENSION under nullglob. Critical: listing a
+    # specific filename that doesn't exist (e.g. metric_history.json, which image
+    # runs never produce) makes `git add` abort and stage NOTHING. Extension globs
+    # under nullglob simply expand to nothing when absent. *.pt checkpoints and the
+    # fid_gen_tmp/ subdir are excluded by construction (only top-level globs).
+    shopt -s nullglob
+    git add -f "${dir}"/*.json "${dir}"/*.log "${dir}"/*.png outputs/run_master.log 2>/dev/null || true
+    shopt -u nullglob
     if git diff --cached --quiet 2>/dev/null; then echo "  (nothing new)"; return 0; fi
     git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
         commit -m "Image ablation: $(basename "$dir") [auto]" >/dev/null 2>&1 || true
-    if git push 2>&1 | tail -2; then echo "  pushed ✓"
-    else echo "  PUSH FAILED — results still on pod; check token/remote"; fi
+    local out rc
+    out="$(git push 2>&1)"; rc=$?
+    echo "$out" | tail -2
+    [ "$rc" -eq 0 ] && echo "  pushed ✓" || echo "  PUSH FAILED — results still on pod; check token/remote"
 }
 
 # -----------------------------------------------------------------------------
@@ -109,14 +116,17 @@ shutdown_trap() {
     echo; echo "=== Run ended (exit ${code}) ==="
     if [ "$AUTOPUSH" = "1" ]; then
         echo "Final safety push of all results + logs before terminating…"
-        git add -f outputs/cifar_*/config.json outputs/cifar_*/metrics.json \
-                   outputs/cifar_*/metric_history.json outputs/cifar_*/training.log outputs/cifar_*/*.png \
-                   outputs/mnist_*/config.json outputs/mnist_*/metrics.json \
-                   outputs/mnist_*/metric_history.json outputs/mnist_*/training.log outputs/mnist_*/*.png \
+        shopt -s nullglob
+        git add -f outputs/cifar_*/*.json outputs/cifar_*/*.log outputs/cifar_*/*.png \
+                   outputs/mnist_*/*.json outputs/mnist_*/*.log outputs/mnist_*/*.png \
                    outputs/run_master.log 2>/dev/null || true
+        shopt -u nullglob
         git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
             commit -m "Image ablation: final [auto]" >/dev/null 2>&1 || true
-        if ! git push 2>&1 | tail -2; then
+        local out rc
+        out="$(git push 2>&1)"; rc=$?
+        echo "$out" | tail -3
+        if [ "$rc" -ne 0 ]; then
             echo "FINAL PUSH FAILED — NOT terminating pod so results aren't lost."
             echo "Fix the token/remote, push manually, then terminate from the web console."
             return
