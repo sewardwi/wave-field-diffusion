@@ -1,9 +1,14 @@
 {
   "attn": "standard",
+  "dynamic_filter": false,
+  "gating": "pointwise",
   "conditioning": "adaln",
+  "num_classes": null,
+  "class_dropout": 0.1,
+  "guidance_scale": 1.0,
   "epochs": 100,
-  "batch_size": 64,
-  "lr": 0.0001,
+  "batch_size": 256,
+  "lr": 0.0004,
   "dim": 128,
   "depth": 6,
   "num_heads": 4,
@@ -13,6 +18,7 @@
   "save_dir": "outputs/sc09_standard_adaln",
   "sample_every": 10,
   "ddim_steps": 50,
+  "eta": 0.0,
   "parameterization": "v",
   "ema_decay": 0.9999,
   "self_cond": true,
@@ -22,5 +28,5 @@
   "classifier_weights": "metrics/weights/sc09_classifier.pt",
   "seed": 42,
   "amp": true,
-  "fast": false
+  "fast": true
 }

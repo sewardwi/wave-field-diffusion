@@ -7,16 +7,43 @@ Parameters: 1,949,712
 Tokens: 1024  attn=standard  cond=adaln  self_cond=True
 Loaded SC09 classifier for FSD: metrics/weights/sc09_classifier.pt
   extracting features for 2000 real clips…
-Epoch   1/100:   0%|          | 0/486 [00:00<?, ?it/s]                                                      Traceback (most recent call last):
-  File "/root/wave-field-diffusion/train_audio.py", line 494, in <module>
+Epoch   1/100:   0%|          | 0/121 [00:00<?, ?it/s]                                                      Traceback (most recent call last):
+  File "/workspace/wave-field-diffusion/train_audio.py", line 536, in <module>
     main()
-  File "/root/wave-field-diffusion/train_audio.py", line 403, in main
-    loss.backward()
-  File "/usr/local/lib/python3.11/dist-packages/torch/_tensor.py", line 521, in backward
-    torch.autograd.backward(
-  File "/usr/local/lib/python3.11/dist-packages/torch/autograd/__init__.py", line 289, in backward
-    _engine_run_backward(
-  File "/usr/local/lib/python3.11/dist-packages/torch/autograd/graph.py", line 769, in _engine_run_backward
-    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+  File "/workspace/wave-field-diffusion/train_audio.py", line 435, in main
+    loss = diffusion.p_losses(model, x, t, y=y)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/diffusion.py", line 180, in p_losses
+    first_pred = self._call_model(model, x_noisy, t, y=y)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/diffusion.py", line 227, in _call_model
+    return model(x_t, t, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/denoisers/audio.py", line 154, in forward
+    h = block(h, t_emb)
+        ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/blocks.py", line 206, in forward
+    x = x + gate1.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift1, scale1))
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/train_audio.py", line 69, in forward
+    attn = (q @ k.transpose(-2, -1) * self.scale).softmax(dim=-1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.00 GiB. GPU 0 has a total capacity of 23.64 GiB of which 2.22 GiB is free. Process 1109651 has 21.41 GiB memory in use. Of the allocated memory 17.90 GiB is allocated by PyTorch, and 3.06 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
