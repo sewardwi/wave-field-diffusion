@@ -156,3 +156,61 @@ Samples: (10000, 1, 16384)  range=[-1.456, 1.606]
 Wrote → outputs/sc09_wave_physics/metrics.json
 
 === Auto-push results for outputs/sc09_wave_physics ===
+To https://github.com/sewardwi/wave-field-diffusion.git
+   ac94ef6..64b565d  main -> main
+  pushed ✓
+
+=== Training: attn=standard  conditioning=physics ===
+    → outputs/sc09_standard_physics
+Device: cuda
+AMP (bf16 autocast): True
+Loading SC09 (digit subset of Speech Commands)…
+  caching 31158 clips into RAM (~2.0 GB)…
+  → 31158 training clips
+Parameters: 1,721,872
+Tokens: 1024  attn=standard  cond=physics  self_cond=True
+Loaded SC09 classifier for FSD: metrics/weights/sc09_classifier.pt
+  extracting features for 2000 real clips…
+Epoch   1/100:   0%|          | 0/121 [00:00<?, ?it/s]                                                      Traceback (most recent call last):
+  File "/workspace/wave-field-diffusion/train_audio.py", line 536, in <module>
+    main()
+  File "/workspace/wave-field-diffusion/train_audio.py", line 435, in main
+    loss = diffusion.p_losses(model, x, t, y=y)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/diffusion.py", line 180, in p_losses
+    first_pred = self._call_model(model, x_noisy, t, y=y)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/diffusion.py", line 227, in _call_model
+    return model(x_t, t, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/denoisers/audio.py", line 154, in forward
+    h = block(h, t_emb)
+        ^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/wave_field/blocks.py", line 213, in forward
+    x = x + g_attn * self.attn(self.norm1(x), t_emb)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/wave-field-diffusion/train_audio.py", line 69, in forward
+    attn = (q @ k.transpose(-2, -1) * self.scale).softmax(dim=-1)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.00 GiB. GPU 0 has a total capacity of 23.64 GiB of which 2.35 GiB is free. Process 1051809 has 21.28 GiB memory in use. Of the allocated memory 17.52 GiB is allocated by PyTorch, and 3.31 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+!!! Training FAILED for standard_physics — see outputs/sc09_standard_physics/training.log. Continuing to next config.
+
+=== Auto-push results for outputs/sc09_standard_physics ===
