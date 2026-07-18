@@ -87,9 +87,14 @@ shutdown_trap() {
     echo; echo "=== Run ended (exit ${code}) ==="
     if [ "$AUTOPUSH" = "1" ]; then
         echo "Final safety push of all results + logs before terminating…"
+        # Also sweep up sc09 artifacts: when this script runs last in an
+        # overnight chain, this final push is the last chance to save anything
+        # an earlier stage failed to push, and its success gates termination.
         shopt -s nullglob
         git add -f outputs/cifar_*/*.json outputs/cifar_*/*.log outputs/cifar_*/*.png \
-                   outputs/cifar_*/*_ema.pt outputs/run_master.log 2>/dev/null || true
+                   outputs/cifar_*/*_ema.pt \
+                   outputs/sc09_*/*.json outputs/sc09_*/*.log outputs/sc09_*/*.png \
+                   outputs/sc09_*/*_ema.pt outputs/run_master.log 2>/dev/null || true
         shopt -u nullglob
         git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
             commit -m "Guidance sweep: final [auto]" >/dev/null 2>&1 || true

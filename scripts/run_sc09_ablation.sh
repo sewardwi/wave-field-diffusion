@@ -71,11 +71,16 @@ autopush_results() {
     echo
     echo "=== Auto-push results for ${dir} ==="
     # Push the full logs (per-config training.log + the master run log) to GitHub
-    # so nothing is lost when the ephemeral pod is torn down. Checkpoints/.wav are
-    # still too big for git and stay on the pod.
-    git add -f "${dir}/metrics.json" "${dir}/metric_history.json" \
-               "${dir}/config.json" "${dir}/training.log" "${dir}"/*.png \
-               "${dir}"/metrics_eta*.json outputs/run_master.log 2>/dev/null || true
+    # so nothing is lost when the ephemeral pod is torn down. Full checkpoints and
+    # .wav samples are too big for git and stay on the pod; the small *_ema.pt
+    # (EMA weights only, ~5 MB) IS pushed so the trained model survives.
+    # Critical: stage by EXTENSION under nullglob — a specific filename that
+    # doesn't exist (e.g. metrics.json after a crashed run) makes `git add`
+    # abort and stage NOTHING. Extension globs simply vanish when absent.
+    shopt -s nullglob
+    git add -f "${dir}"/*.json "${dir}"/*.log "${dir}"/*.png "${dir}"/*_ema.pt \
+               outputs/run_master.log 2>/dev/null || true
+    shopt -u nullglob
     if git diff --cached --quiet 2>/dev/null; then
         echo "  (nothing new to commit)"
         return 0
@@ -159,12 +164,15 @@ shutdown_trap() {
     echo "=== Run ended (exit ${code}) ==="
     if [ "$AUTOPUSH" = "1" ]; then
         echo "Final safety push of all results + full logs before terminating…"
-        git add -f outputs/sc09_*/metrics.json outputs/sc09_*/metric_history.json \
-                   outputs/sc09_*/config.json outputs/sc09_*/training.log outputs/sc09_*/*.png \
-                   outputs/diag_*/metrics.json outputs/diag_*/metrics_eta*.json \
-                   outputs/diag_*/metric_history.json outputs/diag_*/config.json \
-                   outputs/diag_*/training.log outputs/diag_*/*.png \
+        # Extension globs under nullglob (see autopush_results): a single
+        # non-matching specific path (e.g. diag_* when no diagnostic ran) makes
+        # `git add` abort and stage NOTHING.
+        shopt -s nullglob
+        git add -f outputs/sc09_*/*.json outputs/sc09_*/*.log outputs/sc09_*/*.png \
+                   outputs/sc09_*/*_ema.pt \
+                   outputs/diag_*/*.json outputs/diag_*/*.log outputs/diag_*/*.png \
                    outputs/run_master.log 2>/dev/null || true
+        shopt -u nullglob
         git -c user.name="${GIT_NAME:-runpod}" -c user.email="${GIT_EMAIL:-runpod@pod}" \
             commit -m "SC09 results: final [auto]" >/dev/null 2>&1 || true
         if ! git push 2>&1 | tail -2; then
@@ -289,6 +297,22 @@ for entry in "${RUNS[@]}"; do
         autopush_results "$save_dir"
         continue
     fi
+
+    # Extract a small EMA-only checkpoint (~5 MB) that autopush can afford to
+    # commit — the full checkpoints stay on the pod and die with it.
+    python - "$save_dir" <<'PY' || echo "!!! EMA extraction failed for ${save_dir}"
+import glob, sys, torch
+d = sys.argv[1]
+full = [c for c in sorted(glob.glob(f"{d}/checkpoint_epoch*.pt")) if not c.endswith("_ema.pt")]
+if not full:
+    raise SystemExit(f"no full checkpoint in {d}")
+ck = full[-1]
+c = torch.load(ck, map_location="cpu", weights_only=False)
+state = c.get("ema_state_dict") or c["model_state_dict"]
+out = ck.replace(".pt", "_ema.pt")
+torch.save({"ema_state_dict": state}, out)
+print(f"EMA-only checkpoint → {out}")
+PY
 
     if [ "$SKIP_EVAL" = "1" ]; then
         echo "    (skipping 10k-sample eval — SKIP_EVAL=1)"
