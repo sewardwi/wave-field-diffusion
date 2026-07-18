@@ -156,10 +156,10 @@ class DDPMDiffusion:
         self-conditioning (Chen et al. 2022).
 
         Self-conditioning: if model.use_self_cond is True, with probability
-        `self_cond_prob` we run the model once (no grad), recover an x_0
-        estimate, detach it, and feed it back as `self_cond` on a second
-        forward pass.  The other (1−p) of the time we train with zeros so
-        the model handles both cases at inference.
+        `self_cond_prob` we run the model once, recover an x_0 estimate,
+        detach it, and feed it back as `self_cond` on a second forward pass.
+        The other (1−p) of the time we train with zeros so the model handles
+        both cases at inference.
         """
         if noise is None:
             noise = torch.randn_like(x_start)
@@ -169,18 +169,26 @@ class DDPMDiffusion:
         use_sc = getattr(model, "use_self_cond", False)
         self_cond = None
         if use_sc and self_cond_prob > 0 and torch.rand(1).item() < self_cond_prob:
-            with torch.no_grad():
-                first_pred = self._call_model(model, x_noisy, t, y=y)
-                if self.parameterization == "v":
-                    s_ab = self._extract(self.sqrt_alpha_bar, t, x_start.shape)
-                    s_omab = self._extract(self.sqrt_one_minus_alpha_bar, t, x_start.shape)
-                    # x_0 = α·x_t − σ·v
-                    self_cond = s_ab * x_noisy - s_omab * first_pred
-                else:
-                    s_recip = self._extract(self.sqrt_recip_alpha_bar, t, x_start.shape)
-                    s_recipm1 = self._extract(self.sqrt_recipm1_alpha_bar, t, x_start.shape)
-                    self_cond = s_recip * x_noisy - s_recipm1 * first_pred
-                self_cond = self_cond.detach()
+            # This pass must NOT run under torch.no_grad(): p_losses is called
+            # inside the trainer's autocast region, and autocast caches weight
+            # casts per region. A no-grad pass populates that cache with
+            # *detached* casts which the grad pass below then reuses — every
+            # cast-cached weight silently gets zero gradient, and configs with
+            # no fp32 parameter path (standard attn + adaln) crash on
+            # backward. Recording grad here is cheap; the graph is dropped by
+            # detach() below and never backprop'd.
+            first_pred = self._call_model(model, x_noisy, t, y=y)
+            if self.parameterization == "v":
+                s_ab = self._extract(self.sqrt_alpha_bar, t, x_start.shape)
+                s_omab = self._extract(self.sqrt_one_minus_alpha_bar, t, x_start.shape)
+                # x_0 = α·x_t − σ·v
+                self_cond = s_ab * x_noisy - s_omab * first_pred
+            else:
+                s_recip = self._extract(self.sqrt_recip_alpha_bar, t, x_start.shape)
+                s_recipm1 = self._extract(self.sqrt_recipm1_alpha_bar, t, x_start.shape)
+                self_cond = s_recip * x_noisy - s_recipm1 * first_pred
+            self_cond = self_cond.detach()
+            del first_pred  # free the first-pass graph before the main pass
 
         # Main forward pass (with self_cond if computed, else implicit zeros)
         pred = self._call_model(model, x_noisy, t, self_cond, y=y)

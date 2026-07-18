@@ -397,6 +397,10 @@ def main():
                    help="CIFAR only — skip sample generation and reuse PNGs in "
                         "<checkpoint_dir>/fid_gen_tmp/. Useful for retrying after "
                         "a FID-step failure.")
+    p.add_argument("--out_name", default="metrics.json",
+                   help="Output filename inside checkpoint_dir. Use e.g. "
+                        "metrics_g2.0.json for guidance sweeps so the canonical "
+                        "metrics.json isn't overwritten.")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
@@ -458,16 +462,17 @@ def main():
     )
     diffusion.to(device)
 
+    # Conditional eval: sample with uniform random labels + CFG so FID is
+    # meaningful. num_classes/guidance/sampler default to what was trained.
+    num_classes = cfg.get("num_classes", None)
+    guidance_scale = (args.guidance_scale if args.guidance_scale is not None
+                      else (1.0 if num_classes is None else 1.5))
+    sampler = args.sampler or cfg.get("sampler", "ddim")
+
     if args.reuse_samples and modality == "cifar":
         print("Skipping sample generation (--reuse_samples).")
         samples = None
     else:
-        # Conditional eval: sample with uniform random labels + CFG so FID is
-        # meaningful. num_classes/guidance/sampler default to what was trained.
-        num_classes = cfg.get("num_classes", None)
-        guidance_scale = (args.guidance_scale if args.guidance_scale is not None
-                          else (1.0 if num_classes is None else 1.5))
-        sampler = args.sampler or cfg.get("sampler", "ddim")
         if num_classes is not None:
             print(f"Conditional eval: {num_classes} classes, "
                   f"guidance_scale={guidance_scale}, sampler={sampler}")
@@ -501,9 +506,12 @@ def main():
         "n_samples": int(args.n_samples),
         "ddim_steps": int(args.ddim_steps),
         "eta": float(args.eta),
+        "sampler": sampler,
+        "guidance_scale": float(guidance_scale),
+        "num_classes": num_classes,
     })
 
-    out_path = ckpt_dir / "metrics.json"
+    out_path = ckpt_dir / args.out_name
     with open(out_path, "w") as f:
         json.dump(metrics_out, f, indent=2)
 

@@ -363,8 +363,14 @@ def main():
 
     # bf16 autocast pays off on CUDA tensor cores; on CPU/MPS it's a no-op
     # (no benefit / patchy bf16 support), so gate it to keep those paths fp32.
+    # cache_enabled=False: on older torch (pod images ship 2.4) the autocast
+    # weight cache retains detached casts created under no_grad, which zeroed
+    # gradients for cast-cached weights on self-cond batches and crashed
+    # standard+adaln outright. p_losses no longer runs its first pass under
+    # no_grad, but the cache buys little for a model this small — keep it off.
     use_amp = args.amp and device.type == "cuda"
-    amp_ctx = (lambda: torch.autocast(device_type="cuda", dtype=torch.bfloat16)) \
+    amp_ctx = (lambda: torch.autocast(device_type="cuda", dtype=torch.bfloat16,
+                                      cache_enabled=False)) \
         if use_amp else nullcontext
     print(f"AMP (bf16 autocast): {use_amp}")
 

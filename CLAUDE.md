@@ -61,6 +61,8 @@ Each training run writes to `outputs/<name>/` (gitignored): `config.json`, check
 
 ## Gotchas
 
+- Never run a model forward under `torch.no_grad()` inside an autocast region that a later grad-enabled forward shares (the self-conditioning pass in `p_losses` is the canonical case). On older torch (pod images ship ~2.4) the autocast weight cache retains the detached casts, silently zeroing gradients for those weights — and crashing `loss.backward()` in configs with no fp32 parameter path (standard attn + adaln). `p_losses` records grad on its first pass and detaches instead; `train_audio.py` additionally sets `cache_enabled=False`.
+
 - `docs/API_KEYS.md` and `docs/INTERVIEW_NOTES.md` are gitignored on purpose — never commit them.
 - Kernels are L1-normalized so different (α, ω) give consistent magnitudes; keep this invariant if touching kernel construction.
 - The `--attn standard` softmax baseline (`StandardAttention`) is duplicated in each training script *and* in `metrics/evaluate.py` (used to rebuild checkpoints for eval) — changing it means changing all copies.
