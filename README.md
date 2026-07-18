@@ -26,7 +26,7 @@ Three questions, in order of how cleanly they can be answered:
 
 1. **Can a wave-field-only backbone learn the reverse diffusion process at all?** Yes — the kernel diagnostics show the right qualitative behavior, with α curving down from high values at high t to low values at low t, and heads specializing to different frequencies.
 2. **Does the physics-motivated timestep conditioning beat generic AdaLN at the same parameter count?** Mixed result. Physics conditioning has lower per-timestep MSE but a *higher* FID — see Results.
-3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Wall-clock crossover is real (`benchmarks/attn_benchmark.png` — wave field is ~7× faster than softmax at L=2048), but the only experiment that lives in the regime where the asymptotic gain matters is the SC09 audio leg, which is implemented but not yet run.
+3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Wall-clock crossover is real (`benchmarks/attn_benchmark.png` — wave field is ~7× faster than softmax at L=2048), and the SC09 audio leg (1024 tokens) now provides a memory data point too: at batch 256, softmax attention's ~4 GB per-layer attention matrix OOM'd a 24 GB GPU while the wave-field runs fit easily. On sample *quality* at that length, however, softmax still wins — see the SC09 section below.
 
 ## Results
 
@@ -55,7 +55,54 @@ A's FMD advantage is partly the self-conditioning confound. Within the matched n
 
 Full analysis, the metric-disagreement section, and the SC09 placeholder are in [comparison/README.md](comparison/README.md). Aggregated numbers + provenance in [results/](results/), with sample grids per configuration in [results/samples/](results/samples/).
 
-The SC09 audio leg is the missing experiment — it's the only setting in this project where the sequence length (1024 tokens) puts wave field's `O(n log n)` advantage in the regime that matters ([benchmarks/attn_benchmark.png](benchmarks/attn_benchmark.png) shows ~7× speedup at L=2048). Infrastructure is in place ([train_audio.py](train_audio.py), [metrics/evaluate.py](metrics/evaluate.py)); FSD slots are reserved in [results/sc09_fsd_table.json](results/sc09_fsd_table.json) with `fsd: null` pending the four ablation runs.
+### Wave-operator upgrades flip the CIFAR result (2026-07)
+
+The base wave kernel is content-independent — a fixed filter per (head, timestep). Three opt-in upgrades make the operator content-adaptive while staying O(n log n): a data-dependent spectral filter (`--dynamic_filter`, Orchid/AFFNet-style ΔK̂(x) in a smooth Hann frequency basis), Hyena order-2 gating (`--gating hyena`, pre/post data-controlled gates around the convolution), and anisotropic oriented kernels (`--aniso_kernel`, Gabor-like directional selectivity). A cumulative ablation (200 epochs, 10k-sample clean-FID):
+
+| CIFAR-10 run (all self-cond)      | FID ↓     |
+|-----------------------------------|----------:|
+| softmax + AdaLN (baseline)        | 57.40     |
+| wave + physics (base operator)    | 85.86     |
+| + dynamic filter                  | 58.79     |
+| + hyena gating                    | 56.80     |
+| + anisotropic kernels             | **55.63** |
+
+The dynamic filter alone recovers 27 FID points, and the full stack **beats the matched softmax baseline**. The content-independence of the base kernel — not the wave parameterization itself — was the bottleneck.
+
+### SC09 audio — first clean run (2026-07-18)
+
+The earlier SC09 numbers were invalidated by a training bug: the self-conditioning pass ran under `torch.no_grad()` inside the bf16 autocast region, and on the training pod's torch 2.4 the autocast weight cache retained the detached casts — silently zeroing gradients for most weights on ~half of all batches, and crashing the softmax+AdaLN config outright (its every parameter path runs through a cast-cached op). The rerun uses fixed code ([wave_field/diffusion.py](wave_field/diffusion.py)). Two caveats: all runs used the FAST preset (batch 256 at the same epoch count → ~4× fewer optimizer steps than intended), and the wave runs used the **base** operator — the upgrades that flipped CIFAR were not enabled on audio yet.
+
+|     | Attention | Conditioning | FSD ↓  | class entropy ↑ (uniform 2.30) | status |
+|-----|-----------|:------------:|-------:|:---:|--------|
+| A   | wave      | physics      | 43.6   | 0.83 | complete (10k eval) |
+| B   | softmax   | physics      | 30.0\* | 1.53\* | trained 100 epochs; final 10k eval lost to OOM (\*epoch-100 in-training eval, 1k samples) |
+| C   | wave      | AdaLN        | 66.5   | 0.72 | complete (10k eval) |
+| D   | softmax   | AdaLN        | —      | —    | OOM in epoch 1 |
+
+Three findings. **(1)** Softmax+physics decisively beats the base wave operator on audio and keeps near-uniform class coverage while both wave runs collapse onto two digits ("two"/"six") — so the mode collapse is a property of the content-independent kernel, not the training bug; the same diagnosis that motivated the dynamic filter on images. **(2)** The O(L²) memory wall is concrete: at batch 256 and L=1024 tokens the softmax attention matrix is ~4 GB per layer, which OOM'd the 24 GB GPU (killing run D and run B's final eval) while the wave runs fit with room to spare. **(3)** The obvious next experiment — the upgraded wave operator (`--dynamic_filter --gating hyena`) on audio — has not yet been run. Full details and caveats in [results/sc09_fsd_table.json](results/sc09_fsd_table.json).
+
+### CFG guidance sweep, CIFAR-10 (2026-07-18)
+
+Both class-conditional models were retrained (the originals' checkpoints died with their pod) and evaluated at six guidance scales on the same checkpoint. Caveat: the retrains used batch 256 at 200 epochs — **half the optimizer steps** of the table above — so these FIDs are only comparable within this table, not to the July numbers.
+
+| guidance w | wave full stack | softmax + AdaLN |
+|-----------:|----------------:|----------------:|
+| 1.0        | 83.7            | 108.4           |
+| 1.25       | 80.0            | 102.5           |
+| 1.5        | 76.5            | 96.3            |
+| 1.75       | 73.2            | 90.4            |
+| 2.0        | 70.4            | 85.1            |
+| 3.0        | **63.9**        | **69.5**        |
+
+FID falls monotonically through w=3 with no minimum in range — the earlier one-point conclusion that "CFG at 1.5 makes things worse" was an artifact; the optimum for these models sits at w≥3. Two more observations: the wave stack dominates softmax at *every* guidance scale, and it degrades far more gracefully under the halved training budget (at w=1.0: 83.7 vs 108.4, against 55.6 vs 57.4 for the fully-trained unconditional models) — evidence that the physics-constrained operator is markedly more sample-efficient. The EMA checkpoints are committed (`outputs/cifar_*_cond/checkpoint_epoch0200_ema.pt`), so extending the sweep past w=3 requires no retraining.
+
+### Open items
+
+1. SC09 with the upgraded wave operator (`--dynamic_filter --gating hyena`) — the single most informative missing run.
+2. Class-conditional SC09 + CFG to attack the mode collapse directly.
+3. Rerun the guidance sweep on fully-trained (batch-128) conditional models, extending past w=3.
+4. Training-recipe scaling (longer runs, patch size 2, wider/deeper) — at matched budget the architecture question is answered on images; absolute FID is now recipe-limited.
 
 ## Sources
 Using knowledge and inspiration gathered from:

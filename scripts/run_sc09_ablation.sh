@@ -283,13 +283,16 @@ for entry in "${RUNS[@]}"; do
     echo "    → ${save_dir}"
     mkdir -p "$save_dir"
 
-    # FAST preset lets train_audio.py pick batch_size/lr; otherwise pin bs=64.
+    # Always bs=64, even under FAST=1. Two reasons (learned 2026-07-18):
+    #   1. softmax at L=1024 builds a ~4 GB attention matrix per layer at
+    #      bs=256 — OOM'd a 24 GB RTX 4090 (killed run D + run B's final eval).
+    #   2. FAST's bigger batch at fixed epochs = ~4x fewer optimizer steps,
+    #      which wrecks cross-night comparability of the 2x2.
     train_args=(--attn "$attn" --conditioning "$cond" --save_dir "$save_dir" --epochs "$EPOCHS")
     if [ "$FAST" = "1" ]; then
-        train_args+=(--fast)
-    else
-        train_args+=(--batch_size 64)
+        echo "    NOTE: FAST=1 ignored for ablation training (matched bs=64 required; softmax OOMs at bs=256)."
     fi
+    train_args+=(--batch_size 64)
     # A single config's crash (e.g. OOM) must NOT abort the whole ablation. Catch
     # the failure, push its log so the error is visible off-pod, and continue.
     if ! python train_audio.py "${train_args[@]}" 2>&1 | tee "${save_dir}/training.log"; then

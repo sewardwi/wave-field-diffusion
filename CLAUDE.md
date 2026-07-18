@@ -66,3 +66,4 @@ Each training run writes to `outputs/<name>/` (gitignored): `config.json`, check
 - `docs/API_KEYS.md` and `docs/INTERVIEW_NOTES.md` are gitignored on purpose — never commit them.
 - Kernels are L1-normalized so different (α, ω) give consistent magnitudes; keep this invariant if touching kernel construction.
 - The `--attn standard` softmax baseline (`StandardAttention`) is duplicated in each training script *and* in `metrics/evaluate.py` (used to rebuild checkpoints for eval) — changing it means changing all copies.
+- The FAST preset raises batch size at a fixed epoch count, i.e. it *cuts optimizer steps 2–4×*. Never use it for runs whose quality will be compared against non-FAST numbers (the 2026-07-18 FAST retrains scored 20–50 FID worse than their bs-128 July counterparts). Also: softmax attention at L=1024 (SC09) needs a ~4 GB attention matrix per layer at bs=256 and OOMs a 24 GB GPU — `run_sc09_ablation.sh` now forces bs=64 for its ablation runs.

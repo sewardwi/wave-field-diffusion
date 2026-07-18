@@ -2,12 +2,19 @@
   "task": "SC09 unconditional audio generation (spoken digits, 16 kHz, 1.024 s clips)",
   "sequence_length": 16384,
   "tokens_per_clip": 1024,
-  "status": "pending",
+  "status": "partial (2026-07-18) — A and C complete; B trained but lost its final 10k eval to OOM; D OOM'd in epoch 1",
   "rationale": "This is the only experiment in the project that probes a sequence length where wave-field's O(n log n) scaling has a real wall-clock advantage over O(n²) softmax. CIFAR at 64 tokens is too short for the asymptotic crossover (see benchmarks/attn_benchmark.png — wave field is ~7× faster than softmax at L=2048).",
+  "provenance": "2026-07-18 overnight run on an RTX 4090 24 GB, torch 2.4.1+cu124. First run with the AMP/no_grad self-conditioning gradient bug fixed (see wave_field/diffusion.py p_losses); the June 2026 numbers this table previously anticipated were produced under that bug and are invalid.",
+  "caveats": [
+    "FAST preset: batch 256 / lr 4e-4 at 100 epochs = ~4× fewer optimizer steps than the June bs-64 runs — absolute FSDs are not comparable across nights, only across runs within this table.",
+    "Wave runs used the BASE wave operator only — the dynamic-filter / hyena-gating upgrades that flipped the CIFAR result were NOT enabled (--dynamic_filter/--gating were left at defaults).",
+    "Runs B and D hit CUDA OOM inside softmax attention: at batch 256 and L=1024 the attention matrix is ~4 GB per layer. D died in epoch 1 (no results); B survived training (its in-training eval numbers are reported, 1k samples vs 10k for A/C) but crashed before the final eval and checkpoint push."
+  ],
   "training": {
-    "epochs": 200,
-    "batch_size": 32,
-    "lr": 1e-4,
+    "epochs": 100,
+    "batch_size": 256,
+    "lr": 4e-4,
+    "preset": "FAST=1 (train_audio.py --fast)",
     "schedule": "cosine",
     "parameterization": "v",
     "ddim_steps": 50,
@@ -38,35 +45,38 @@
     {
       "id": "A",
       "name": "wave + physics",
-      "attention": "wave (1D FFT)",
+      "attention": "wave (1D FFT, base operator)",
       "conditioning": "physics",
-      "fsd": null,
-      "confident_accuracy": null,
-      "class_entropy": null,
-      "wall_clock_per_step_ms": null,
-      "checkpoint": "outputs/sc09_wave_physics/checkpoint_epoch0200.pt"
+      "fsd": 43.609,
+      "confident_accuracy": 0.589,
+      "class_entropy": 0.833,
+      "class_counts": [0, 0, 3730, 83, 0, 22, 5887, 278, 0, 0],
+      "eval": "final, 10k samples",
+      "checkpoint": "outputs/sc09_wave_physics/checkpoint_epoch0100_ema.pt (EMA-only, committed)"
     },
     {
       "id": "B",
       "name": "standard + physics",
       "attention": "softmax",
       "conditioning": "physics",
-      "fsd": null,
-      "confident_accuracy": null,
-      "class_entropy": null,
-      "wall_clock_per_step_ms": null,
-      "checkpoint": "outputs/sc09_standard_physics/checkpoint_epoch0200.pt"
+      "fsd": 29.976,
+      "confident_accuracy": 0.498,
+      "class_entropy": 1.534,
+      "class_counts": [0, 45, 26, 37, 5, 13, 344, 363, 20, 147],
+      "eval": "epoch-100 in-training eval, 1k samples (final 10k eval + checkpoint lost: OOM after training completed)",
+      "checkpoint": null
     },
     {
       "id": "C",
       "name": "wave + AdaLN",
-      "attention": "wave (1D FFT)",
+      "attention": "wave (1D FFT, base operator)",
       "conditioning": "AdaLN-Zero",
-      "fsd": null,
-      "confident_accuracy": null,
-      "class_entropy": null,
-      "wall_clock_per_step_ms": null,
-      "checkpoint": "outputs/sc09_wave_adaln/checkpoint_epoch0200.pt"
+      "fsd": 66.520,
+      "confident_accuracy": 0.899,
+      "class_entropy": 0.725,
+      "class_counts": [0, 0, 6736, 46, 0, 0, 3039, 179, 0, 0],
+      "eval": "final, 10k samples",
+      "checkpoint": "outputs/sc09_wave_adaln/checkpoint_epoch0100_ema.pt (EMA-only, committed)"
     },
     {
       "id": "D",
@@ -76,15 +86,19 @@
       "fsd": null,
       "confident_accuracy": null,
       "class_entropy": null,
-      "wall_clock_per_step_ms": null,
-      "checkpoint": "outputs/sc09_standard_adaln/checkpoint_epoch0200.pt"
+      "class_counts": null,
+      "eval": "none — CUDA OOM in epoch 1 (softmax attention matrix at batch 256, L=1024)",
+      "checkpoint": null
     }
   ],
-  "to_run": [
-    "python train_audio.py --attn wave     --conditioning physics --save_dir outputs/sc09_wave_physics",
-    "python train_audio.py --attn standard --conditioning physics --save_dir outputs/sc09_standard_physics",
-    "python train_audio.py --attn wave     --conditioning adaln   --save_dir outputs/sc09_wave_adaln",
-    "python train_audio.py --attn standard --conditioning adaln   --save_dir outputs/sc09_standard_adaln",
-    "python -m metrics.evaluate outputs/sc09_<...> --n_samples 10000   # for each run"
+  "findings": [
+    "softmax+physics decisively beats the base wave operator on audio at this budget (FSD 30.0 vs 43.6) and keeps far better class coverage (entropy 1.53 vs 0.83).",
+    "Both wave runs mode-collapse onto two digits ('two'/'six'); softmax does not. Collapse is therefore a property of the content-independent wave kernel, not the (now fixed) gradient bug — the same diagnosis that motivated the dynamic spectral filter on images.",
+    "The O(L²) memory wall is concrete: softmax OOM'd a 24 GB GPU at batch 256 / L=1024 while the wave runs fit easily — the memory half of the asymptotic argument, demonstrated in the target regime."
+  ],
+  "to_run_next": [
+    "Repeat the 2×2 with the upgraded wave operator: --dynamic_filter --gating hyena (never yet tested on audio; it flipped the CIFAR result)",
+    "Class-conditional + CFG runs (--num_classes 10) to attack the mode collapse directly",
+    "Use batch 64 for softmax runs (fits in 24 GB) or cap FAST for --attn standard; scale epochs with batch size so optimizer-step counts match across comparisons"
   ]
 }
