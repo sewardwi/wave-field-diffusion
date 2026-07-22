@@ -466,7 +466,7 @@ def main():
     # meaningful. num_classes/guidance/sampler default to what was trained.
     num_classes = cfg.get("num_classes", None)
     guidance_scale = (args.guidance_scale if args.guidance_scale is not None
-                      else (1.0 if num_classes is None else 1.5))
+                      else cfg.get("guidance_scale", 1.0 if num_classes is None else 1.5))
     sampler = args.sampler or cfg.get("sampler", "ddim")
 
     if args.reuse_samples and modality == "cifar":
