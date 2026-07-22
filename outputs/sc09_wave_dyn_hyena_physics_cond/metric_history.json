@@ -1,0 +1,202 @@
+[
+  {
+    "epoch": 10,
+    "frechet_sc09_distance": 142.61516751888837,
+    "confident_accuracy": 0.9549999833106995,
+    "mean_top1_confidence": 0.7561306953430176,
+    "class_entropy": 0.6820910573005676,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      0,
+      23,
+      0,
+      0,
+      1,
+      717,
+      259,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 20,
+    "frechet_sc09_distance": 103.21599897964029,
+    "confident_accuracy": 1.0,
+    "mean_top1_confidence": 0.904289960861206,
+    "class_entropy": 0.08203395456075668,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      984,
+      16,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 30,
+    "frechet_sc09_distance": 59.858438662763675,
+    "confident_accuracy": 0.9990000128746033,
+    "mean_top1_confidence": 0.8928901553153992,
+    "class_entropy": 0.031479060649871826,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      995,
+      5,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 40,
+    "frechet_sc09_distance": 51.148899688518135,
+    "confident_accuracy": 0.3449999988079071,
+    "mean_top1_confidence": 0.46307024359703064,
+    "class_entropy": 0.9745618104934692,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      0,
+      0,
+      38,
+      0,
+      45,
+      503,
+      414,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 50,
+    "frechet_sc09_distance": 53.793198967081146,
+    "confident_accuracy": 0.04699999839067459,
+    "mean_top1_confidence": 0.3165464699268341,
+    "class_entropy": 1.0492993593215942,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      0,
+      19,
+      620,
+      10,
+      9,
+      221,
+      121,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 60,
+    "frechet_sc09_distance": 48.842382853236344,
+    "confident_accuracy": 0.2199999988079071,
+    "mean_top1_confidence": 0.3941921293735504,
+    "class_entropy": 1.5615535974502563,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      0,
+      93,
+      334,
+      125,
+      114,
+      3,
+      308,
+      23,
+      0,
+      0
+    ]
+  },
+  {
+    "epoch": 70,
+    "frechet_sc09_distance": 35.87003014140775,
+    "confident_accuracy": 0.453000009059906,
+    "mean_top1_confidence": 0.5412414073944092,
+    "class_entropy": 1.6028292179107666,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      4,
+      210,
+      197,
+      26,
+      98,
+      12,
+      394,
+      51,
+      0,
+      8
+    ]
+  },
+  {
+    "epoch": 80,
+    "frechet_sc09_distance": 22.493513240859116,
+    "confident_accuracy": 0.6610000133514404,
+    "mean_top1_confidence": 0.6555263996124268,
+    "class_entropy": 1.8296692371368408,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      21,
+      146,
+      142,
+      26,
+      91,
+      31,
+      393,
+      101,
+      9,
+      40
+    ]
+  },
+  {
+    "epoch": 90,
+    "frechet_sc09_distance": 14.425205447502371,
+    "confident_accuracy": 0.7889999747276306,
+    "mean_top1_confidence": 0.7222787141799927,
+    "class_entropy": 2.0546438694000244,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      45,
+      115,
+      143,
+      27,
+      83,
+      49,
+      299,
+      137,
+      46,
+      56
+    ]
+  },
+  {
+    "epoch": 100,
+    "frechet_sc09_distance": 8.371247327976846,
+    "confident_accuracy": 0.8399999737739563,
+    "mean_top1_confidence": 0.7640869617462158,
+    "class_entropy": 2.185384511947632,
+    "class_entropy_uniform": 2.302585092994046,
+    "class_counts": [
+      61,
+      109,
+      119,
+      38,
+      102,
+      45,
+      206,
+      159,
+      85,
+      76
+    ]
+  }
+]

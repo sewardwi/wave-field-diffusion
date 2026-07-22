@@ -1,0 +1,27 @@
+{
+  "confident_accuracy": 0.8461999893188477,
+  "mean_top1_confidence": 0.7677773833274841,
+  "class_entropy": 2.180387020111084,
+  "class_entropy_uniform": 2.302585092994046,
+  "class_counts": [
+    679,
+    1054,
+    1289,
+    291,
+    937,
+    482,
+    2132,
+    1464,
+    800,
+    872
+  ],
+  "frechet_sc09_distance": 8.548004674010606,
+  "modality": "sc09",
+  "checkpoint": "checkpoint_epoch0100_ema.pt",
+  "n_samples": 10000,
+  "ddim_steps": 50,
+  "eta": 0.0,
+  "sampler": "ddim",
+  "guidance_scale": 2.0,
+  "num_classes": 10
+}
