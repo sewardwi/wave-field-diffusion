@@ -1,0 +1,42 @@
+{
+  "config": {
+    "device": "NVIDIA GeForce RTX 4090",
+    "torch": "2.4.1+cu124",
+    "seq_len_samples": 16384,
+    "tokens": 1024,
+    "batch_size": 64,
+    "amp_bf16": true,
+    "warmup": 10,
+    "iters": 30,
+    "note": "single clean fwd/step (self_cond=zeros); isolates the attention operator."
+  },
+  "results": [
+    {
+      "params": 1721872,
+      "fwd_ms_median": 58.409,
+      "step_ms_median": 159.79,
+      "step_ms_mean": 160.052,
+      "peak_mb": 14386.5,
+      "error": null,
+      "label": "standard (softmax)"
+    },
+    {
+      "params": 1846072,
+      "fwd_ms_median": 12.425,
+      "step_ms_median": 41.122,
+      "step_ms_mean": 41.02,
+      "peak_mb": 3394.1,
+      "error": null,
+      "label": "wave (base)"
+    },
+    {
+      "params": 1991584,
+      "fwd_ms_median": 12.29,
+      "step_ms_median": 42.415,
+      "step_ms_mean": 42.389,
+      "peak_mb": 3603.4,
+      "error": null,
+      "label": "wave (dyn+hyena)"
+    }
+  ]
+}

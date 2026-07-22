@@ -1,0 +1,17 @@
+Device: NVIDIA GeForce RTX 4090  torch 2.4.1+cu124  tokens=1024  bs=64  amp=True
+  benchmarking standard (softmax) …
+  benchmarking wave (base) …
+  benchmarking wave (dyn+hyena) …
+
+=== Audio model benchmark @ 1024 tokens, bs 64 ===
+  operator                 params    fwd ms   step ms   peak MB
+  -------------------- ---------- --------- --------- ---------
+  standard (softmax)    1,721,872     58.41    159.79     14386
+  wave (base)           1,846,072     12.43     41.12      3394
+  wave (dyn+hyena)      1,991,584     12.29     42.41      3603
+
+  vs softmax (step time / peak mem):
+    wave (base)          3.89x faster step, 4.24x less memory
+    wave (dyn+hyena)     3.77x faster step, 3.99x less memory
+
+Wrote → outputs/audio_bench/audio_bench.json
