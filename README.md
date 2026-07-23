@@ -26,7 +26,7 @@ Three questions, in order of how cleanly they can be answered:
 
 1. **Can a wave-field-only backbone learn the reverse diffusion process at all?** Yes — the kernel diagnostics show the right qualitative behavior, with α curving down from high values at high t to low values at low t, and heads specializing to different frequencies.
 2. **Does the physics-motivated timestep conditioning beat generic AdaLN at the same parameter count?** Mixed result. Physics conditioning has lower per-timestep MSE but a *higher* FID — see Results.
-3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Yes, on both axes. Wall-clock crossover is real (`benchmarks/attn_benchmark.png` — wave field is ~7× faster than softmax at L=2048), and the memory gap is concrete: at batch 256 and L=1024, softmax attention's ~4 GB per-layer matrix OOM'd a 24 GB GPU while the wave-field runs fit easily. On sample *quality* at that length, the upgraded wave operator (dynamic filter + hyena gating) reaches FSD 8–15 on SC09, clearing the softmax baseline — see the SC09 sections below.
+3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Yes, on both axes, and now measured on the real models. At matched budget on SC09 (1024 tokens), the wave operator beats softmax on sample quality (FSD ~16 vs ~26) *and* runs ~3.9× faster per step using ~4.2× less peak memory (3.4 GB vs 14.4 GB) — see the matched head-to-head below. This is the clearest support the project has for the central thesis.
 
 ## Results
 
@@ -96,7 +96,37 @@ The upgrade that flipped CIFAR (`--dynamic_filter --gating hyena`), now run on a
 
 The upgrade reproduces the image result on audio: FSD drops **3–3.5×** (physics 43.6→14.9, AdaLN 66.5→19.0), and it **fixes the mode collapse on its own** — every digit is now generated (entropy 1.57–1.92, up from ~0.8) without any class-conditioning. That confirms the collapse was a property of the content-independent base kernel, not an inherent limit of wave attention. The upgraded unconditional model (14.9) also clears the softmax baseline from the previous run (30.0), the same flip seen on CIFAR.
 
-Class-conditioning + CFG then adds a further ~2× (to FSD ~8) and drives class balance to near-uniform (entropy ~2.22), but it is now *polish on a working model*, not the rescue it would have been for the collapsed base operator. One nuance: physics conditioning's edge is specific to the unconditional regime (14.9 vs 19.0 for AdaLN); once explicit labels + CFG are added the two conditioning schemes converge and AdaLN is marginally ahead (8.0 vs 8.5). **Caveat:** the base-operator runs it's compared against used batch 256 (~4× fewer optimizer steps), so the raw FSD delta conflates the operator with training budget — but the entropy recovery isolates the operator cleanly, since more steps deepen a collapse rather than lift it, and the matched-budget CIFAR ablation already established the operator's effect directly. A matched batch-64 base-operator rerun is the clean confirmation still owed.
+Class-conditioning + CFG then adds a further ~2× (to FSD ~8) and drives class balance to near-uniform (entropy ~2.22). One nuance: physics conditioning's edge is specific to the unconditional regime (14.9 vs 19.0 for AdaLN); once explicit labels + CFG are added the two conditioning schemes converge and AdaLN is marginally ahead (8.0 vs 8.5).
+
+> **Correction (from the matched run below).** This section originally read the FSD drop (43.6→14.9, 66.5→19.0) as evidence the operator *upgrade* fixed audio quality and the mode collapse — with the caveat that the base runs used batch 256. The matched batch-64 rerun shows that caveat was the whole story: **the improvement was training budget, not the operator.** At batch 64, the *base* operator already reaches 16.9/16.1 and covers all ten digits, and the dynamic-filter/hyena upgrade adds little (physics 16.9→14.9) or *hurts* (AdaLN 16.1→19.0). See below.
+
+### SC09 audio — matched batch-64 head-to-head + measured efficiency (2026-07-22)
+
+The clean comparison the earlier runs couldn't support: softmax, base wave, and upgraded wave, all unconditional, **all at batch 64 / 100 epochs / lr 1e-4 / 10k-sample FSD** — no budget confound. Plus a measured efficiency benchmark on the real denoisers.
+
+**Quality** (FSD ↓; class entropy in parentheses, uniform = 2.30):
+
+| operator (bs 64, unconditional) | physics | AdaLN |
+|---------------------------------|--------:|------:|
+| softmax                         | 25.4 (1.19) | 27.4 (0.98) |
+| wave (base)                     | 16.9 (1.82) | **16.1** (1.36) |
+| wave (dynamic filter + hyena)   | **14.9** (1.57) | 19.0 (1.92) |
+
+**Efficiency** (RTX 4090, bf16, bs 64, 1024 tokens, real `WaveFieldAudioDenoiser`, forward + backward step):
+
+| operator | fwd ms | step ms | peak GPU MB | vs softmax |
+|----------|-------:|--------:|------------:|------------|
+| softmax        | 58.4 | 159.8 | 14,387 | — |
+| wave (base)    | 12.4 | 41.1  | 3,394  | **3.9× faster, 4.2× less memory** |
+| wave (dyn+hyena)| 12.3 | 42.4 | 3,603  | 3.8× faster, 4.0× less memory |
+
+Three conclusions, and one of them corrects a prior claim:
+
+1. **At matched budget, the wave operator beats softmax on audio quality** — decisively (FSD ~16 vs ~26) and with better class coverage. The earlier run's apparent "softmax wins on quality" was purely the budget confound; with equal optimizer steps the ordering flips, matching the image result.
+
+2. **The dynamic-filter/hyena upgrade that won on CIFAR does *not* transfer to audio.** At matched budget it gives a small gain for physics (16.9→14.9) and a regression for AdaLN (16.1→19.0). The 3–3.5× "improvement from the upgrade" reported on 2026-07-18/22 was training budget (batch 64 vs 256), not the operator — the mode-collapse fix too: the base operator at batch 64 already covers all ten digits (entropy 1.36–1.82, up from ~0.8 at batch 256). The upgrade's benefit appears to be modality-specific.
+
+3. **The O(n log n) advantage is now measured, not projected, and it is large.** On the real models at 1024 tokens, wave is **~3.9× faster per training step and uses ~4.2× less peak memory** than softmax (3.4 GB vs 14.4 GB); forward-only is 4.7× faster. The upgrade costs almost nothing on top (+3% time, +6% memory) — so it is essentially free, it just doesn't help audio quality. Taken together with conclusion 1, this is the project's strongest single claim: **in the long-sequence regime, the wave operator matches-or-beats softmax on quality while being ~4× cheaper in both time and memory.**
 
 ### CFG guidance sweep, CIFAR-10 (2026-07-18)
 
@@ -115,11 +145,11 @@ FID falls monotonically through w=3 with no minimum in range — the earlier one
 
 ### Open items
 
-1. Matched batch-64 base-operator SC09 rerun, to cleanly separate the operator upgrade from the ~4× training-budget difference in the 2026-07-22 comparison.
-2. Upgraded softmax baseline on audio (batch 64) for a clean head-to-head against the upgraded wave operator at L=1024.
+1. **Why does the dynamic-filter/hyena upgrade help images but not audio?** It regressed AdaLN on SC09 at matched budget. Worth understanding before treating it as a general-purpose win — the content-adaptive filter may be overfitting the short 64-token image grid, or the 1D-vs-2D kernel may interact with it differently.
+2. Scale the matched audio comparison up (longer training and/or larger models) to see whether the wave quality lead over softmax holds or widens as both leave the undertrained regime.
 3. Audio CFG guidance sweep — only w=2 was tested; the CIFAR optimum was w≥3.
 4. Rerun the CIFAR guidance sweep on fully-trained (batch-128) conditional models, extending past w=3.
-5. Training-recipe scaling (longer runs, patch size 2, wider/deeper) — at matched budget the architecture question is answered on images; absolute FID is now recipe-limited.
+5. Training-recipe scaling on images (longer runs, patch size 2, wider/deeper) — the architecture question is answered at matched budget; absolute FID is now recipe-limited.
 
 ## Sources
 Using knowledge and inspiration gathered from:

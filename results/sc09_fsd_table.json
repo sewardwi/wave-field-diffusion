@@ -2,7 +2,7 @@
   "task": "SC09 unconditional audio generation (spoken digits, 16 kHz, 1.024 s clips)",
   "sequence_length": 16384,
   "tokens_per_clip": 1024,
-  "status": "base 2x2 partial (2026-07-18: A/C complete, B lost final eval to OOM, D OOM'd epoch 1); upgraded-operator 2x2 complete (2026-07-22, see 'upgraded_operator_2x2' below — the headline audio result)",
+  "status": "COMPLETE. The headline audio result is 'matched_bs64' below: at matched budget the wave operator beats softmax on quality (FSD ~16 vs ~26) and is ~4x faster + ~4x less memory. Note the correction it forces on 'upgraded_operator_2x2' (the earlier operator-upgrade gains were training budget, not the operator). 'base_2x2' (2026-07-18) and 'upgraded_operator_2x2' (2026-07-22) are kept for provenance.",
   "rationale": "This is the only experiment in the project that probes a sequence length where wave-field's O(n log n) scaling has a real wall-clock advantage over O(n²) softmax. CIFAR at 64 tokens is too short for the asymptotic crossover (see benchmarks/attn_benchmark.png — wave field is ~7× faster than softmax at L=2048).",
   "provenance": "2026-07-18 overnight run on an RTX 4090 24 GB, torch 2.4.1+cu124. First run with the AMP/no_grad self-conditioning gradient bug fixed (see wave_field/diffusion.py p_losses); the June 2026 numbers this table previously anticipated were produced under that bug and are invalid.",
   "caveats": [
@@ -107,17 +107,40 @@
       {"name": "wave + AdaLN (upgraded, C+CFG)",   "conditioning": "adaln",   "class_conditional": true,  "guidance_scale": 2.0, "fsd": 8.033, "confident_accuracy": 0.822, "class_entropy": 2.220}
     ],
     "findings": [
-      "The upgrade reproduces the CIFAR result on audio: FSD drops 3-3.5x vs the base operator (physics 43.6->14.9, AdaLN 66.5->19.0).",
-      "The upgrade FIXES the mode collapse on its own: entropy rises from ~0.8 (base, 2 digits) to 1.57-1.92 (all 10 digits) with NO class-conditioning. The collapse was a property of the content-independent kernel, not a limit of wave attention.",
-      "The upgraded unconditional model (14.9) clears the prior softmax baseline (30.0) — the same flip seen on CIFAR.",
-      "Class-conditioning + CFG adds a further ~2x (to FSD ~8) and near-uniform class balance (entropy ~2.22), but it is polish on a working model, not a rescue.",
-      "physics beats AdaLN only in the unconditional regime (14.9 vs 19.0); with explicit labels + CFG they converge and AdaLN is marginally ahead (8.0 vs 8.5).",
-      "CAVEAT: the base-operator runs used batch 256 (~4x fewer optimizer steps), so the raw FSD delta conflates operator with training budget. The entropy recovery isolates the operator (more steps deepen collapse, they don't lift it), but a matched batch-64 base rerun is still owed."
+      "SUPERSEDED by the matched batch-64 run (see 'matched_bs64' below). These findings attributed the FSD drop and collapse fix to the operator upgrade, with a batch-256-vs-64 budget caveat. The matched run shows the caveat was the whole story: the improvement was training budget, not the operator.",
+      "Class-conditioning + CFG adds a further ~2x (to FSD ~8) and near-uniform class balance (entropy ~2.22). physics beats AdaLN only unconditionally (14.9 vs 19.0); with labels + CFG they converge, AdaLN marginally ahead (8.0 vs 8.5). This part still stands."
+    ]
+  },
+  "matched_bs64": {
+    "date": "2026-07-22",
+    "provenance": "RTX 4090, torch 2.4.1+cu124, scripts/run_sc09_matched.sh. All runs unconditional, batch 64, lr 1e-4, 100 epochs, 10k-sample FSD — matched to the upgraded-wave bs=64 runs so softmax / base-wave / upgraded-wave form one comparison with no budget confound.",
+    "question": "At matched budget and L=1024, does the wave operator beat softmax on audio quality, and how much of the 2026-07-18/22 gains were the operator vs training budget?",
+    "quality_fsd": {
+      "softmax + physics":       {"fsd": 25.377, "class_entropy": 1.190},
+      "softmax + adaln":         {"fsd": 27.426, "class_entropy": 0.976},
+      "wave(base) + physics":    {"fsd": 16.923, "class_entropy": 1.821},
+      "wave(base) + adaln":      {"fsd": 16.076, "class_entropy": 1.361},
+      "wave(dyn+hyena) + physics": {"fsd": 14.861, "class_entropy": 1.571, "note": "from upgraded_operator_2x2, same config"},
+      "wave(dyn+hyena) + adaln":   {"fsd": 19.049, "class_entropy": 1.915, "note": "from upgraded_operator_2x2, same config"}
+    },
+    "efficiency_benchmark": {
+      "source": "scripts/benchmark_audio_models.py, outputs/audio_bench/audio_bench.json",
+      "setup": "RTX 4090, bf16, batch 64, 1024 tokens, real WaveFieldAudioDenoiser, single clean forward+backward step (isolates the attention operator)",
+      "softmax":        {"fwd_ms": 58.4, "step_ms": 159.8, "peak_mb": 14386},
+      "wave(base)":     {"fwd_ms": 12.4, "step_ms": 41.1,  "peak_mb": 3394,  "vs_softmax": "3.89x faster step, 4.24x less memory, 4.70x faster forward"},
+      "wave(dyn+hyena)":{"fwd_ms": 12.3, "step_ms": 42.4,  "peak_mb": 3603,  "vs_softmax": "3.77x faster step, 3.99x less memory; +3% time / +6% mem over base"}
+    },
+    "findings": [
+      "At matched budget the wave operator BEATS softmax on audio quality: FSD ~16 (base wave) vs ~26 (softmax), with better class coverage. The earlier 'softmax wins on quality' was entirely the budget confound.",
+      "The dynamic-filter/hyena upgrade does NOT transfer from images to audio: at matched budget it helps physics slightly (16.9->14.9) but HURTS AdaLN (16.1->19.0). The 3-3.5x 'operator' gain claimed on 07-18/22 was training budget (bs64 vs bs256).",
+      "The mode-collapse fix was also budget, not the operator: base wave at bs64 already covers all 10 digits (entropy 1.36-1.82) vs 2 digits at bs256 (entropy 0.72-0.83).",
+      "O(n log n) advantage MEASURED on the real models: wave is 3.9x faster/step and uses 4.2x less peak memory than softmax at 1024 tokens (3.4 GB vs 14.4 GB). The upgrade adds ~nothing (+3% time, +6% mem) — essentially free, just unhelpful on audio.",
+      "Headline: in the long-sequence regime, wave matches-or-beats softmax on quality at matched budget while being ~4x cheaper in time and memory — the full thesis, demonstrated."
     ]
   },
   "to_run_next": [
-    "Matched batch-64 base-operator 2x2 rerun, to separate the operator upgrade from the training-budget difference above",
-    "Upgraded softmax baseline on audio (batch 64) for a clean head-to-head at L=1024",
+    "Understand why the dynamic-filter/hyena upgrade helps images but regresses audio AdaLN (overfitting the short image grid? 1D-vs-2D kernel interaction?)",
+    "Scale the matched audio comparison (longer training / larger models) to see if the wave quality lead over softmax holds or widens",
     "Audio CFG guidance sweep — only w=2.0 tested; CIFAR optimum was w>=3"
   ]
 }
