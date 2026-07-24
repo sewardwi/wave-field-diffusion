@@ -1,0 +1,203 @@
+{
+  "config": {
+    "device": "NVIDIA GeForce RTX 4090",
+    "torch": "2.4.1+cu124",
+    "batch_size": 8,
+    "dim": 256,
+    "heads": 8,
+    "amp_bf16": true,
+    "lengths": [
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536
+    ],
+    "warmup": 5,
+    "iters": 15
+  },
+  "series": {
+    "softmax_naive": {
+      "1024": {
+        "fwd_ms": 2.316,
+        "step_ms": 6.321,
+        "peak_mb": 1121.5,
+        "error": null
+      },
+      "2048": {
+        "fwd_ms": 8.477,
+        "step_ms": 22.982,
+        "peak_mb": 4372.0,
+        "error": null
+      },
+      "4096": {
+        "fwd_ms": 33.334,
+        "step_ms": 90.202,
+        "peak_mb": 17315.7,
+        "error": null
+      },
+      "8192": {
+        "fwd_ms": null,
+        "step_ms": null,
+        "peak_mb": null,
+        "error": "CUDA out of memory. Tried to allocate 16.00 GiB. GPU 0 has a total capacity of 23.53 GiB of which 14.75 GiB is free. Including non-PyTorch memory, this process has 8.77 GiB memory in use. Of the allocated memory 8.27 GiB is allocated by PyTorch, and 36.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+      },
+      "16384": {
+        "fwd_ms": null,
+        "step_ms": null,
+        "peak_mb": null,
+        "error": "CUDA out of memory. Tried to allocate 32.00 GiB. GPU 0 has a total capacity of 23.53 GiB of which 22.46 GiB is free. Including non-PyTorch memory, this process has 1.05 GiB memory in use. Of the allocated memory 529.25 MiB is allocated by PyTorch, and 68.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+      },
+      "32768": {
+        "fwd_ms": null,
+        "step_ms": null,
+        "peak_mb": null,
+        "error": "CUDA out of memory. Tried to allocate 128.00 GiB. GPU 0 has a total capacity of 23.53 GiB of which 21.90 GiB is free. Including non-PyTorch memory, this process has 1.62 GiB memory in use. Of the allocated memory 1.02 GiB is allocated by PyTorch, and 132.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+      },
+      "65536": {
+        "fwd_ms": null,
+        "step_ms": null,
+        "peak_mb": null,
+        "error": "CUDA out of memory. Tried to allocate 512.00 GiB. GPU 0 has a total capacity of 23.53 GiB of which 20.90 GiB is free. Including non-PyTorch memory, this process has 2.62 GiB memory in use. Of the allocated memory 2.02 GiB is allocated by PyTorch, and 132.75 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)"
+      }
+    },
+    "softmax_flash": {
+      "1024": {
+        "fwd_ms": 0.381,
+        "step_ms": 1.561,
+        "peak_mb": 94.0,
+        "error": null
+      },
+      "2048": {
+        "fwd_ms": 0.391,
+        "step_ms": 1.76,
+        "peak_mb": 169.7,
+        "error": null
+      },
+      "4096": {
+        "fwd_ms": 1.128,
+        "step_ms": 4.246,
+        "peak_mb": 321.3,
+        "error": null
+      },
+      "8192": {
+        "fwd_ms": 3.922,
+        "step_ms": 15.005,
+        "peak_mb": 624.3,
+        "error": null
+      },
+      "16384": {
+        "fwd_ms": 14.781,
+        "step_ms": 55.859,
+        "peak_mb": 1230.4,
+        "error": null
+      },
+      "32768": {
+        "fwd_ms": 59.875,
+        "step_ms": 215.173,
+        "peak_mb": 2442.5,
+        "error": null
+      },
+      "65536": {
+        "fwd_ms": 249.29,
+        "step_ms": 881.726,
+        "peak_mb": 4866.8,
+        "error": null
+      }
+    },
+    "wave_base": {
+      "1024": {
+        "fwd_ms": 2.332,
+        "step_ms": 7.059,
+        "peak_mb": 131.8,
+        "error": null
+      },
+      "2048": {
+        "fwd_ms": 2.188,
+        "step_ms": 7.407,
+        "peak_mb": 245.2,
+        "error": null
+      },
+      "4096": {
+        "fwd_ms": 2.256,
+        "step_ms": 6.419,
+        "peak_mb": 472.1,
+        "error": null
+      },
+      "8192": {
+        "fwd_ms": 3.195,
+        "step_ms": 9.301,
+        "peak_mb": 925.9,
+        "error": null
+      },
+      "16384": {
+        "fwd_ms": 6.141,
+        "step_ms": 18.767,
+        "peak_mb": 1833.5,
+        "error": null
+      },
+      "32768": {
+        "fwd_ms": 12.154,
+        "step_ms": 38.336,
+        "peak_mb": 3649.7,
+        "error": null
+      },
+      "65536": {
+        "fwd_ms": 29.467,
+        "step_ms": 84.365,
+        "peak_mb": 7279.1,
+        "error": null
+      }
+    },
+    "wave_upgraded": {
+      "1024": {
+        "fwd_ms": 2.889,
+        "step_ms": 8.98,
+        "peak_mb": 140.4,
+        "error": null
+      },
+      "2048": {
+        "fwd_ms": 2.819,
+        "step_ms": 9.135,
+        "peak_mb": 262.3,
+        "error": null
+      },
+      "4096": {
+        "fwd_ms": 2.8,
+        "step_ms": 8.699,
+        "peak_mb": 506.0,
+        "error": null
+      },
+      "8192": {
+        "fwd_ms": 3.308,
+        "step_ms": 8.979,
+        "peak_mb": 931.8,
+        "error": null
+      },
+      "16384": {
+        "fwd_ms": 5.57,
+        "step_ms": 17.096,
+        "peak_mb": 1843.9,
+        "error": null
+      },
+      "32768": {
+        "fwd_ms": 10.863,
+        "step_ms": 34.914,
+        "peak_mb": 4053.3,
+        "error": null
+      },
+      "65536": {
+        "fwd_ms": 26.329,
+        "step_ms": 77.018,
+        "peak_mb": 8087.4,
+        "error": null
+      }
+    }
+  },
+  "crossover": {
+    "wave_base_beats_flash_step_ms_at_L": 8192,
+    "wave_base_beats_flash_peak_mb_at_L": null
+  }
+}
