@@ -26,7 +26,7 @@ Three questions, in order of how cleanly they can be answered:
 
 1. **Can a wave-field-only backbone learn the reverse diffusion process at all?** Yes — the kernel diagnostics show the right qualitative behavior, with α curving down from high values at high t to low values at low t, and heads specializing to different frequencies.
 2. **Does the physics-motivated timestep conditioning beat generic AdaLN at the same parameter count?** Mixed result. Physics conditioning has lower per-timestep MSE but a *higher* FID — see Results.
-3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Yes, on both axes, and now measured on the real models. At matched budget on SC09 (1024 tokens), the wave operator beats softmax on sample quality (FSD ~16 vs ~26) *and* runs ~3.9× faster per step using ~4.2× less peak memory (3.4 GB vs 14.4 GB) — see the matched head-to-head below. This is the clearest support the project has for the central thesis.
+3. **Does the FFT-based architecture become competitive at scale, where O(n log n) actually matters?** Partly, and only for long sequences. Against a real FlashAttention baseline (not the naive softmax earlier numbers used), wave is a **speed** win only beyond ~8k tokens — where it grows to ~10× faster than FlashAttention at 65k — and is **never** a memory win (FlashAttention uses ~1.5× less throughout). At SC09's 1024 tokens it is actually slower and heavier than FlashAttention. Separately, at matched budget it beats softmax on sample *quality* (FSD ~16 vs ~26). See "Efficiency vs FlashAttention" below for the honest crossover.
 
 ## Results
 
@@ -80,7 +80,7 @@ The earlier SC09 numbers were invalidated by a training bug: the self-conditioni
 | C   | wave      | AdaLN        | 66.5   | 0.72 | complete (10k eval) |
 | D   | softmax   | AdaLN        | —      | —    | OOM in epoch 1 |
 
-Three findings. **(1)** Softmax+physics decisively beats the base wave operator on audio and keeps near-uniform class coverage while both wave runs collapse onto two digits ("two"/"six") — so the mode collapse is a property of the content-independent kernel, not the training bug; the same diagnosis that motivated the dynamic filter on images. **(2)** The O(L²) memory wall is concrete: at batch 256 and L=1024 tokens the softmax attention matrix is ~4 GB per layer, which OOM'd the 24 GB GPU (killing run D and run B's final eval) while the wave runs fit with room to spare. **(3)** The obvious next experiment — the upgraded wave operator (`--dynamic_filter --gating hyena`) on audio — is the run below. Full details and caveats in [results/sc09_fsd_table.json](results/sc09_fsd_table.json).
+Three findings. **(1)** Softmax+physics decisively beats the base wave operator on audio and keeps near-uniform class coverage while both wave runs collapse onto two digits ("two"/"six") — so the mode collapse is a property of the content-independent kernel, not the training bug; the same diagnosis that motivated the dynamic filter on images. **(2)** These softmax runs used *naive* materialized attention, which OOM'd the 24 GB GPU at batch 256 (killing run D and run B's final eval) while the wave runs fit. This is a limitation of naive softmax, **not** a wave memory advantage — FlashAttention removes the wall and in fact uses *less* memory than wave (see "Efficiency vs FlashAttention"). **(3)** The obvious next experiment — the upgraded wave operator (`--dynamic_filter --gating hyena`) on audio — is the run below. Full details and caveats in [results/sc09_fsd_table.json](results/sc09_fsd_table.json).
 
 ### SC09 audio — upgraded operator + class-conditioning (2026-07-22)
 
@@ -100,9 +100,9 @@ Class-conditioning + CFG then adds a further ~2× (to FSD ~8) and drives class b
 
 > **Correction (from the matched run below).** This section originally read the FSD drop (43.6→14.9, 66.5→19.0) as evidence the operator *upgrade* fixed audio quality and the mode collapse — with the caveat that the base runs used batch 256. The matched batch-64 rerun shows that caveat was the whole story: **the improvement was training budget, not the operator.** At batch 64, the *base* operator already reaches 16.9/16.1 and covers all ten digits, and the dynamic-filter/hyena upgrade adds little (physics 16.9→14.9) or *hurts* (AdaLN 16.1→19.0). See below.
 
-### SC09 audio — matched batch-64 head-to-head + measured efficiency (2026-07-22)
+### SC09 audio — matched batch-64 head-to-head (2026-07-22)
 
-The clean comparison the earlier runs couldn't support: softmax, base wave, and upgraded wave, all unconditional, **all at batch 64 / 100 epochs / lr 1e-4 / 10k-sample FSD** — no budget confound. Plus a measured efficiency benchmark on the real denoisers.
+The clean comparison the earlier runs couldn't support: softmax, base wave, and upgraded wave, all unconditional, **all at batch 64 / 100 epochs / lr 1e-4 / 10k-sample FSD** — no budget confound. (Efficiency is covered separately in the next section, against a fair baseline.)
 
 **Quality** (FSD ↓; class entropy in parentheses, uniform = 2.30):
 
@@ -112,21 +112,45 @@ The clean comparison the earlier runs couldn't support: softmax, base wave, and 
 | wave (base)                     | 16.9 (1.82) | **16.1** (1.36) |
 | wave (dynamic filter + hyena)   | **14.9** (1.57) | 19.0 (1.92) |
 
-**Efficiency** (RTX 4090, bf16, bs 64, 1024 tokens, real `WaveFieldAudioDenoiser`, forward + backward step):
-
-| operator | fwd ms | step ms | peak GPU MB | vs softmax |
-|----------|-------:|--------:|------------:|------------|
-| softmax        | 58.4 | 159.8 | 14,387 | — |
-| wave (base)    | 12.4 | 41.1  | 3,394  | **3.9× faster, 4.2× less memory** |
-| wave (dyn+hyena)| 12.3 | 42.4 | 3,603  | 3.8× faster, 4.0× less memory |
-
-Three conclusions, and one of them corrects a prior claim:
+Two quality conclusions:
 
 1. **At matched budget, the wave operator beats softmax on audio quality** — decisively (FSD ~16 vs ~26) and with better class coverage. The earlier run's apparent "softmax wins on quality" was purely the budget confound; with equal optimizer steps the ordering flips, matching the image result.
 
 2. **The dynamic-filter/hyena upgrade that won on CIFAR does *not* transfer to audio.** At matched budget it gives a small gain for physics (16.9→14.9) and a regression for AdaLN (16.1→19.0). The 3–3.5× "improvement from the upgrade" reported on 2026-07-18/22 was training budget (batch 64 vs 256), not the operator — the mode-collapse fix too: the base operator at batch 64 already covers all ten digits (entropy 1.36–1.82, up from ~0.8 at batch 256). The upgrade's benefit appears to be modality-specific.
 
-3. **The O(n log n) advantage is now measured, not projected, and it is large.** On the real models at 1024 tokens, wave is **~3.9× faster per training step and uses ~4.2× less peak memory** than softmax (3.4 GB vs 14.4 GB); forward-only is 4.7× faster. The upgrade costs almost nothing on top (+3% time, +6% memory) — so it is essentially free, it just doesn't help audio quality. Taken together with conclusion 1, this is the project's strongest single claim: **in the long-sequence regime, the wave operator matches-or-beats softmax on quality while being ~4× cheaper in both time and memory.**
+The efficiency picture is in the next section — and it is **not** the "~4× cheaper" this section originally claimed. That number was measured against naive materialized softmax; against a real FlashAttention baseline it does not survive.
+
+### Efficiency vs FlashAttention — the honest crossover (2026-07-24)
+
+The efficiency claims above and in earlier sections compared wave against **naive materialized softmax** (`(qkᵀ).softmax()·v`, which builds the full L×L matrix). Nobody trains attention that way anymore — the standard is `F.scaled_dot_product_attention` (FlashAttention / memory-efficient kernels, O(L) memory). Re-measured against *that* baseline, the story changes substantially.
+
+**Full model at 1024 tokens** (RTX 4090, bf16, bs 64, real `WaveFieldAudioDenoiser`, fwd+bwd step) — the naive-vs-fair difference, and why the old number was wrong:
+
+| softmax baseline | step ms | peak GPU MB |
+|------------------|--------:|------------:|
+| naive (materialized) — *old strawman* | 159.8 | 14,387 |
+| FlashAttention (SDPA) — *fair*        | **36.5** | **2,448** |
+| wave (base)                           | 58.9 | 3,394 |
+
+Against the fair baseline, **at 1024 tokens FlashAttention is ~1.6× faster and uses ~1.4× less memory than wave** — the opposite of the retracted claim. The strawman had inflated softmax by 4.4× (time) and 5.9× (memory); that inflation *was* the entire apparent advantage.
+
+**Operator-level sweep, 1k→64k tokens** (bs 8, dim 256, 8 heads; naive softmax OOMs past 4k):
+
+| tokens | flash softmax | wave (base) | flash softmax | wave (base) |
+|-------:|--------------:|------------:|--------------:|------------:|
+|        | **step ms**   | **step ms** | **peak MB**   | **peak MB** |
+| 1,024  | 1.6           | 7.1         | 94            | 132         |
+| 4,096  | 4.2           | 6.4         | 321           | 472         |
+| 8,192  | 15.0          | **9.3**     | 624           | 926         |
+| 16,384 | 55.9          | 18.8        | 1,230         | 1,834       |
+| 65,536 | 881.7         | **84.4**    | 4,867         | 7,279       |
+
+Two clean findings:
+
+- **Speed: wave overtakes FlashAttention at ~8,192 tokens.** Below that, flash is faster (4.5× at 1k); above it, wave's O(L log L) pulls away from flash's O(L²) — **~10× faster at 65k tokens**. This is the genuine, honestly-measured asymptotic advantage.
+- **Memory: FlashAttention wins at every length.** Wave uses ~1.4–1.5× *more* memory throughout, because its FFT path materializes complex spectra while flash tiles and materializes nothing. **The memory advantage claimed earlier does not exist against a real baseline.**
+
+So the efficiency thesis, stated honestly: **the wave operator is a speed win only for long sequences (≳8k tokens), where it can be many times faster than FlashAttention, and it is never a memory win.** SC09 at 1024 tokens sits *below* the crossover — on that task wave buys better quality at higher compute and memory cost, not lower. The efficiency payoff belongs to genuinely long-context settings, which is where future work should aim. Scaling curves: [outputs/crossover/crossover.png](outputs/crossover/crossover.png).
 
 ### CFG guidance sweep, CIFAR-10 (2026-07-18)
 
@@ -145,11 +169,12 @@ FID falls monotonically through w=3 with no minimum in range — the earlier one
 
 ### Open items
 
-1. **Why does the dynamic-filter/hyena upgrade help images but not audio?** It regressed AdaLN on SC09 at matched budget. Worth understanding before treating it as a general-purpose win — the content-adaptive filter may be overfitting the short 64-token image grid, or the 1D-vs-2D kernel may interact with it differently.
-2. Scale the matched audio comparison up (longer training and/or larger models) to see whether the wave quality lead over softmax holds or widens as both leave the undertrained regime.
-3. Audio CFG guidance sweep — only w=2 was tested; the CIFAR optimum was w≥3.
-4. Rerun the CIFAR guidance sweep on fully-trained (batch-128) conditional models, extending past w=3.
-5. Training-recipe scaling on images (longer runs, patch size 2, wider/deeper) — the architecture question is answered at matched budget; absolute FID is now recipe-limited.
+1. **The efficiency payoff is a long-context story now, so test a genuinely long-context task** (≳8k-token audio/video/high-res image) where wave is faster than FlashAttention — 1024-token SC09 sits below the crossover and shows no efficiency win. This is where the thesis has to prove itself.
+2. **Reduce wave's memory constant.** It uses ~1.5× more memory than FlashAttention because the FFT path materializes complex spectra; closing that gap (in-place FFT, fp16 spectra, chunking) is what would turn the speed-only win into a speed-and-memory win.
+3. **Benchmark against the real competition** — Mamba/S4, Hyena — not just softmax. Those are the sub-quadratic baselines a reviewer or buyer will expect; beating softmax is table stakes.
+4. **Why does the dynamic-filter/hyena upgrade help images but not audio?** It regressed AdaLN on SC09 at matched budget — content-adaptive filter overfitting the short 64-token image grid, or a 1D-vs-2D kernel interaction?
+5. Scale the matched audio comparison up (longer training / larger models) to see whether the wave quality lead over softmax holds or widens out of the undertrained regime.
+6. Lower priority: audio CFG guidance sweep (only w=2 tested; CIFAR optimum w≥3); CIFAR guidance sweep on fully-trained batch-128 conditional models past w=3.
 
 ## Sources
 Using knowledge and inspiration gathered from:
