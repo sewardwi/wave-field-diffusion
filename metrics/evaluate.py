@@ -71,8 +71,13 @@ class StandardAttention(nn.Module):
         q = q.view(B, L, H, Dh).permute(0, 2, 1, 3)
         k = k.view(B, L, H, Dh).permute(0, 2, 1, 3)
         v = v.view(B, L, H, Dh).permute(0, 2, 1, 3)
-        attn = (q @ k.transpose(-2, -1) * self.scale).softmax(dim=-1)
-        out = (attn @ v).permute(0, 2, 1, 3).contiguous().view(B, L, D)
+        # scaled_dot_product_attention routes to FlashAttention / memory-
+        # efficient kernels (O(L) memory, no materialized L×L matrix) — the
+        # correct modern softmax baseline. Default scale = head_dim**-0.5.
+        # Identical math to the materialized path, so old softmax checkpoints
+        # load and evaluate unchanged.
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, L, D)
         return self.out_proj(out)
 
 

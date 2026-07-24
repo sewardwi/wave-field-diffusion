@@ -44,8 +44,11 @@ class StandardAttention1D(nn.Module):
         q = q.view(B, L, H, Dh).permute(0, 2, 1, 3)
         k = k.view(B, L, H, Dh).permute(0, 2, 1, 3)
         v = v.view(B, L, H, Dh).permute(0, 2, 1, 3)
-        attn = (q @ k.transpose(-2, -1) * self.scale).softmax(dim=-1)
-        out = (attn @ v).permute(0, 2, 1, 3).contiguous().view(B, L, D)
+        # NOTE: superseded by scripts/benchmark_crossover.py, which compares
+        # wave against BOTH naive and FlashAttention softmax over a length sweep.
+        # This now uses the memory-efficient kernel (the fair baseline).
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        out = out.permute(0, 2, 1, 3).contiguous().view(B, L, D)
         return self.out_proj(out)
 
 
