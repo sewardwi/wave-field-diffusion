@@ -79,3 +79,12 @@ Device: NVIDIA GeForce RTX 4090  torch 2.4.1+cu124  tokens=1024  bs=64  amp=True
 Wrote → outputs/audio_bench/audio_bench.json
 
 === Auto-push ===
+To https://github.com/sewardwi/wave-field-diffusion.git
+   4033956..bddf82f  main -> main
+  pushed ✓
+
+Done. Crossover: outputs/crossover/{crossover.json,crossover.png}; full-model: outputs/audio_bench/audio_bench.json
+
+=== Run ended ===
+
+=== Auto-push ===
