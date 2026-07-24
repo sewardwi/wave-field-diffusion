@@ -13,27 +13,27 @@
   "results": [
     {
       "params": 1721872,
-      "fwd_ms_median": 58.409,
-      "step_ms_median": 159.79,
-      "step_ms_mean": 160.052,
-      "peak_mb": 14386.5,
+      "fwd_ms_median": 8.879,
+      "step_ms_median": 36.491,
+      "step_ms_mean": 35.315,
+      "peak_mb": 2447.7,
       "error": null,
       "label": "standard (softmax)"
     },
     {
       "params": 1846072,
-      "fwd_ms_median": 12.425,
-      "step_ms_median": 41.122,
-      "step_ms_mean": 41.02,
+      "fwd_ms_median": 12.671,
+      "step_ms_median": 58.862,
+      "step_ms_mean": 58.925,
       "peak_mb": 3394.1,
       "error": null,
       "label": "wave (base)"
     },
     {
       "params": 1991584,
-      "fwd_ms_median": 12.29,
-      "step_ms_median": 42.415,
-      "step_ms_mean": 42.389,
+      "fwd_ms_median": 14.094,
+      "step_ms_median": 76.232,
+      "step_ms_mean": 75.653,
       "peak_mb": 3603.4,
       "error": null,
       "label": "wave (dyn+hyena)"
